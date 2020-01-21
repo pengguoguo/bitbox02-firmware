@@ -28,20 +28,29 @@
 #include "ui/event.h"
 #include "ui/event_handler.h"
 #include "util.h"
+#include <platform_config.h>
 #include <ui/component.h>
 
 #define MAX_REGISTRATIONS 7
 #define MAX_HISTORY 30
 
-// The minimum amount of sliding difference required, so that the gesture is detected as slide, not
-// touch
+/** The minimum amount of sliding difference required, so that the gesture is detected as slide. */
 static const uint8_t SLIDE_DETECTION_DIFF = MAX_SLIDER_POS * 0.04; // Percent of slider range
+/**
+ * The maximum amount of sliding that the user's finger is allowed to move
+ * for its gesture to be still considered a tap.
+ */
+static const uint8_t TAP_SLIDE_TOLERANCE = MAX_SLIDER_POS * 0.1; // Percent of slider range
 
 extern volatile uint8_t measurement_done_touch;
 
 /********************************** STATE **********************************/
 
+#if PLATFORM_BITBOX02 == 1
 static const uint16_t LONG_TOUCH = 500;
+#elif PLATFORM_BITBOXBASE == 1
+static const uint16_t LONG_TOUCH = 1000;
+#endif
 
 enum slider_status_t { INACTIVE, ACTIVE, RELEASED };
 
@@ -60,11 +69,16 @@ typedef struct {
     uint16_t position_start;
     // The last measured position.
     uint16_t position_current;
+    /*
+     * The maximum distance the finger has travelled
+     * since starting the gesture.
+     */
+    uint16_t max_slide_travel;
     int32_t velocity_sum;
     uint16_t velocity_index;
     // Stores the velocities.
     int16_t velocity_values[MAX_HISTORY];
-    // The gesture type (tap, slide).
+    // The gesture type (tap, slide). FUTURE: remove this?
     enum gesture_type_t gesture_type;
     // The status of the slider.
     enum slider_status_t slider_status;
@@ -77,6 +91,24 @@ typedef struct {
  */
 static gestures_detection_state_t _state[TOUCH_NUM_SLIDERS] = {0};
 
+#if PLATFORM_BITBOXBASE == 1
+struct button_detection_state_t {
+    enum bitboxbase_button_id_t button_id;
+    uint32_t duration;
+    enum slider_status_t button_status;
+};
+
+struct button_detection_state_t _bitboxbase_button_state[] = {
+    {BITBOXBASE_BUTTON_LEFT, 0, INACTIVE},
+    {BITBOXBASE_BUTTON_RIGHT, 0, INACTIVE},
+};
+
+enum bitboxbase_button_id_t gestures_button_which(const event_t* event)
+{
+    return ((const struct button_detection_state_t*)event->data)->button_id;
+}
+#endif
+
 /********************************** STATE UPDATE **********************************/
 
 /**
@@ -87,6 +119,7 @@ static void _slider_state_update(gestures_detection_state_t* state, uint16_t pos
     if (state->duration == 0) {
         state->position_start = position;
         state->position_current = position;
+        state->max_slide_travel = 0;
         state->gesture_type = TAP;
     }
     int16_t velocity_current = position - state->position_current;
@@ -95,6 +128,8 @@ static void _slider_state_update(gestures_detection_state_t* state, uint16_t pos
     state->velocity_sum = state->velocity_sum - velocity_removed + velocity_current;
     state->velocity_values[state->velocity_index] = velocity_current;
     state->velocity_index = (state->velocity_index + 1) % MAX_HISTORY;
+    uint16_t distance_from_start = abs((int)position - (int)state->position_start);
+    state->max_slide_travel = MAX(distance_from_start, state->max_slide_travel);
 
     state->slider_status = ACTIVE;
     if (abs(state->position_current - state->position_start) > SLIDE_DETECTION_DIFF) {
@@ -146,12 +181,14 @@ static void _collect_gestures_data(
 
 static bool _is_continuous_tap(uint8_t location)
 {
-    return _state[location].gesture_type == TAP && _state[location].slider_status == ACTIVE;
+    return _state[location].max_slide_travel < TAP_SLIDE_TOLERANCE &&
+           _state[location].slider_status == ACTIVE;
 }
 
 static bool _is_tap_release(uint8_t location)
 {
-    return _state[location].gesture_type == TAP && _state[location].slider_status == RELEASED;
+    return _state[location].max_slide_travel < TAP_SLIDE_TOLERANCE &&
+           _state[location].slider_status == RELEASED;
 }
 
 static bool _is_long_tap_release(uint8_t location)
@@ -234,6 +271,59 @@ static void _emit_continuous_tap_event(void)
     }
 }
 
+#if PLATFORM_BITBOXBASE == 1
+static void _emit_button_short_tap(size_t idx)
+{
+    event_t event = {.data = &_bitboxbase_button_state[idx], .id = EVENT_BUTTON_SHORT_TAP};
+    emit_event(&event);
+}
+
+static void _emit_button_long_tap(size_t idx)
+{
+    event_t event = {.data = &_bitboxbase_button_state[idx], .id = EVENT_BUTTON_LONG_TAP};
+    emit_event(&event);
+}
+
+static void _emit_button_continouos_tap(size_t idx)
+{
+    event_t event = {.data = &_bitboxbase_button_state[idx], .id = EVENT_BUTTON_CONTINUOUS_TAP};
+    emit_event(&event);
+}
+
+static void _button_state_update_and_emit(size_t idx)
+{
+    bool active = qtouch_get_button_state(idx);
+    struct button_detection_state_t* current = &_bitboxbase_button_state[idx];
+    switch (current->button_status) {
+    case INACTIVE:
+        if (active) {
+            current->button_status = ACTIVE;
+        }
+        break;
+    case ACTIVE:
+        current->duration++;
+        if (current->duration > LONG_TOUCH) {
+            _emit_button_continouos_tap(idx);
+        }
+        if (!active) {
+            current->button_status = RELEASED;
+        }
+        break;
+    case RELEASED:
+        if (current->duration > LONG_TOUCH) {
+            _emit_button_long_tap(idx);
+        } else {
+            _emit_button_short_tap(idx);
+        }
+        current->button_status = INACTIVE;
+        current->duration = 0;
+        break;
+    default:;
+        // Do nothing
+    }
+}
+#endif
+
 /********************************** MEASURE, DETECT and CALLBACK **********************************/
 
 /**
@@ -253,6 +343,12 @@ static void _measure_and_emit(void)
         _slider_state_read_and_update(location);
         gesture_detected = gesture_detected || _state[location].gesture_type != NONE;
     }
+
+#if PLATFORM_BITBOXBASE == 1
+    for (size_t button = 0; button < DEF_NUM_BUTTONS; button++) {
+        _button_state_update_and_emit(button);
+    }
+#endif
 
     if (gesture_detected) {
         _emit_continuous_slide_event();

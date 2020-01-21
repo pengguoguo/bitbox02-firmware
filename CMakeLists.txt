@@ -53,7 +53,6 @@ set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_SOURCE_DIR}/tools/nanopb/extr
 option(COVERAGE "Compile with test coverage flags." OFF)
 option(SANITIZE_ADDRESS "Compile with asan." OFF)
 option(SANITIZE_UNDEFINED "Compile with ubsan." OFF)
-option(BUILD_DOCUMENTATION "Build the Doxygen documentation." OFF)
 option(CMAKE_VERBOSE_MAKEFILE "Verbose build." OFF)
 # Generate compile_command.json (for tidy and other tools)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
@@ -76,8 +75,8 @@ endif()
 # Finds objcopy and other utilities for us
 if(CMAKE_CROSSCOMPILING)
   include(CMakeFindBinUtils)
-  find_program(CMAKE_SIZE "${TOOLCHAIN_PREFIX}size" HINTS /usr/local/bin)
-  message(STATUS size: ${CMAKE_SIZE} ${TOOLCHAIN_PREFIX}size)
+  find_program(CMAKE_SIZE "${TOOLCHAIN_PREFIX}size")
+  message(STATUS "size: ${CMAKE_SIZE} ${TOOLCHAIN_PREFIX}size")
 endif()
 
 
@@ -86,9 +85,10 @@ endif()
 #
 # Versions MUST contain three parts and start with lowercase 'v'.
 # Example 'v1.0.0'. They MUST not contain a pre-release label such as '-beta'.
-set(FIRMWARE_VERSION "v4.1.0")
-set(FIRMWARE_BTC_ONLY_VERSION "v4.1.0")
-set(BOOTLOADER_VERSION "v1.0.1")
+set(FIRMWARE_VERSION "v5.0.0")
+set(FIRMWARE_BTC_ONLY_VERSION "v5.0.0")
+set(FIRMWARE_BITBOXBASE_VERSION "v5.0.0")
+set(BOOTLOADER_VERSION "v1.0.2")
 
 find_package(PythonInterp 3.6 REQUIRED)
 
@@ -116,6 +116,16 @@ if(GIT_FOUND AND PYTHONINTERP_FOUND)
     set(GIT_FIRMWARE_BTC_ONLY_VERSION_STRING "v0.0.0")
   endif()
   execute_process(
+    COMMAND ${PYTHON_EXECUTABLE} ./scripts/get_version firmware-bitboxbase --check-semver --check-gpg
+    RESULT_VARIABLE exit_code
+    OUTPUT_VARIABLE GIT_FIRMWARE_BITBOXBASE_VERSION_STRING
+    WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    OUTPUT_STRIP_TRAILING_WHITESPACE
+  )
+  if(NOT exit_code EQUAL "0")
+    set(GIT_FIRMWARE_BITBOXBASE_VERSION_STRING "v0.0.0")
+  endif()
+  execute_process(
     COMMAND ${PYTHON_EXECUTABLE} ./scripts/get_version bootloader --check-semver --check-gpg
     RESULT_VARIABLE exit_code
     OUTPUT_VARIABLE GIT_BOOTLOADER_VERSION_STRING
@@ -137,7 +147,7 @@ if(GIT_FOUND AND PYTHONINTERP_FOUND)
     set(GIT_COMMIT_HASH "0000000000000000000000000000000000000000")
   endif()
   execute_process(
-    COMMAND ${GIT_EXECUTABLE} rev-parse --short HEAD
+    COMMAND ${GIT_EXECUTABLE} rev-parse --short=10 HEAD
     RESULT_VARIABLE exit_code
     OUTPUT_VARIABLE GIT_COMMIT_HASH_SHORT
     WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
@@ -151,22 +161,15 @@ else()
   set(GIT_FIRMWARE_BTC_ONLY_VERSION_STRING "v0.0.0")
   set(GIT_BOOTLOADER_VERSION_STRING "v0.0.0")
   set(GIT_COMMIT_HASH "0000000000000000000000000000000000000000")
-  set(GIT_COMMIT_HASH_SHORT "000000")
+  set(GIT_COMMIT_HASH_SHORT "0000000000")
 endif()
+
+# MULTI
 
 # If the current HEAD is not on the matching tag append '-pre' for "pre-release"
 set(FIRMWARE_VERSION_FULL ${FIRMWARE_VERSION})
 if(NOT FIRMWARE_VERSION STREQUAL GIT_FIRMWARE_VERSION_STRING)
   string(APPEND FIRMWARE_VERSION_FULL "-pre+${GIT_COMMIT_HASH_SHORT}")
-endif()
-set(FIRMWARE_BTC_ONLY_VERSION_FULL ${FIRMWARE_BTC_ONLY_VERSION})
-if(NOT FIRMWARE_BTC_ONLY_VERSION STREQUAL GIT_FIRMWARE_BTC_ONLY_VERSION_STRING)
-  string(APPEND FIRMWARE_BTC_ONLY_VERSION_FULL "-pre+${GIT_COMMIT_HASH_SHORT}")
-endif()
-set(BOOTLOADER_VERSION_FULL ${BOOTLOADER_VERSION})
-if(NOT BOOTLOADER_VERSION STREQUAL GIT_BOOTLOADER_VERSION_STRING)
-  string(APPEND BOOTLOADER_VERSION_FULL "-pre+${GIT_COMMIT_HASH_SHORT}")
-  add_definitions("-DBOOTLOADER_VERSION_HAS_METADATA")
 endif()
 
 string(REPLACE "." ";" VERSION_LIST ${FIRMWARE_VERSION})
@@ -175,26 +178,62 @@ list(GET VERSION_LIST 1 MINOR)
 list(GET VERSION_LIST 2 PATCH)
 string(REPLACE "v" "" MAJOR ${vMAJOR})
 
-string(REPLACE "." ";" VERSION_LIST ${FIRMWARE_BTC_ONLY_VERSION})
-list(GET VERSION_LIST 0 vMAJOR)
-list(GET VERSION_LIST 1 MINOR_BTC_ONLY)
-list(GET VERSION_LIST 2 PATCH_BTC_ONLY)
-string(REPLACE "v" "" MAJOR_BTC_ONLY ${vMAJOR})
-
-string(LENGTH ${BOOTLOADER_VERSION_FULL} BOOTLOADER_VERSION_FULL_LEN)
-string(REGEX REPLACE "(.)" "'\\1', 0, " BOOTLOADER_VERSION_FULL_W16 ${BOOTLOADER_VERSION_FULL})
-
 string(LENGTH ${FIRMWARE_VERSION_FULL} FIRMWARE_VERSION_FULL_LEN)
 string(REGEX REPLACE "(.)" "'\\1', 0, " FIRMWARE_VERSION_FULL_W16 ${FIRMWARE_VERSION_FULL})
 set(FIRMWARE_VERSION_MAJOR ${MAJOR})
 set(FIRMWARE_VERSION_MINOR ${MINOR})
 set(FIRMWARE_VERSION_PATCH ${PATCH})
 
+# BTC-ONLY
+
+# If the current HEAD is not on the matching tag append '-pre' for "pre-release"
+set(FIRMWARE_BTC_ONLY_VERSION_FULL ${FIRMWARE_BTC_ONLY_VERSION})
+if(NOT FIRMWARE_BTC_ONLY_VERSION STREQUAL GIT_FIRMWARE_BTC_ONLY_VERSION_STRING)
+  string(APPEND FIRMWARE_BTC_ONLY_VERSION_FULL "-pre+${GIT_COMMIT_HASH_SHORT}")
+endif()
+
+string(REPLACE "." ";" VERSION_LIST ${FIRMWARE_BTC_ONLY_VERSION})
+list(GET VERSION_LIST 0 vMAJOR)
+list(GET VERSION_LIST 1 MINOR_BTC_ONLY)
+list(GET VERSION_LIST 2 PATCH_BTC_ONLY)
+string(REPLACE "v" "" MAJOR_BTC_ONLY ${vMAJOR})
+
 string(LENGTH ${FIRMWARE_BTC_ONLY_VERSION_FULL} FIRMWARE_BTC_ONLY_VERSION_FULL_LEN)
 string(REGEX REPLACE "(.)" "'\\1', 0, " FIRMWARE_BTC_ONLY_VERSION_FULL_W16 ${FIRMWARE_BTC_ONLY_VERSION_FULL})
 set(FIRMWARE_BTC_ONLY_VERSION_MAJOR ${MAJOR_BTC_ONLY})
 set(FIRMWARE_BTC_ONLY_VERSION_MINOR ${MINOR_BTC_ONLY})
 set(FIRMWARE_BTC_ONLY_VERSION_PATCH ${PATCH_BTC_ONLY})
+
+# BITBOXBASE
+
+# If the current HEAD is not on the matching tag append '-pre' for "pre-release"
+set(FIRMWARE_BITBOXBASE_VERSION_FULL ${FIRMWARE_BITBOXBASE_VERSION})
+if(NOT FIRMWARE_BITBOXBASE_VERSION STREQUAL GIT_FIRMWARE_BITBOXBASE_VERSION_STRING)
+  string(APPEND FIRMWARE_BITBOXBASE_VERSION_FULL "-pre+${GIT_COMMIT_HASH_SHORT}")
+endif()
+
+string(REPLACE "." ";" VERSION_LIST ${FIRMWARE_BITBOXBASE_VERSION})
+list(GET VERSION_LIST 0 vMAJOR)
+list(GET VERSION_LIST 1 MINOR_BITBOXBASE)
+list(GET VERSION_LIST 2 PATCH_BITBOXBASE)
+string(REPLACE "v" "" MAJOR_BITBOXBASE ${vMAJOR})
+
+string(LENGTH ${FIRMWARE_BITBOXBASE_VERSION_FULL} FIRMWARE_BITBOXBASE_VERSION_FULL_LEN)
+string(REGEX REPLACE "(.)" "'\\1', 0, " FIRMWARE_BITBOXBASE_VERSION_FULL_W16 ${FIRMWARE_BITBOXBASE_VERSION_FULL})
+set(FIRMWARE_BITBOXBASE_VERSION_MAJOR ${MAJOR_BITBOXBASE})
+set(FIRMWARE_BITBOXBASE_VERSION_MINOR ${MINOR_BITBOXBASE})
+set(FIRMWARE_BITBOXBASE_VERSION_PATCH ${PATCH_BITBOXBASE})
+
+# BOOTLOADER
+
+set(BOOTLOADER_VERSION_FULL ${BOOTLOADER_VERSION})
+if(NOT BOOTLOADER_VERSION STREQUAL GIT_BOOTLOADER_VERSION_STRING)
+  string(APPEND BOOTLOADER_VERSION_FULL "-pre+${GIT_COMMIT_HASH_SHORT}")
+  add_definitions("-DBOOTLOADER_VERSION_HAS_METADATA")
+endif()
+
+string(LENGTH ${BOOTLOADER_VERSION_FULL} BOOTLOADER_VERSION_FULL_LEN)
+string(REGEX REPLACE "(.)" "'\\1', 0, " BOOTLOADER_VERSION_FULL_W16 ${BOOTLOADER_VERSION_FULL})
 
 configure_file(src/version.h.in src/version.h)
 configure_file(src/bootloader/bootloader_version.h.in src/bootloader/bootloader_version.h)
@@ -236,10 +275,12 @@ execute_process(
 message(STATUS "\n\n=============================================")
 message(STATUS "            - General -")
 message(STATUS "Firmware version:       ${FIRMWARE_VERSION_FULL}")
-message(STATUS "Firmware (btc) version: ${FIRMWARE_BTC_ONLY_VERSION_FULL}")
-message(STATUS "Bootloader version:     ${BOOTLOADER_VERSION_FULL}")
 message(STATUS "Firmware v. (git):      ${GIT_FIRMWARE_VERSION_STRING}")
+message(STATUS "Firmware-btc version:   ${FIRMWARE_BTC_ONLY_VERSION_FULL}")
 message(STATUS "Firmware-btc v. (git):  ${GIT_FIRMWARE_BTC_ONLY_VERSION_STRING}")
+message(STATUS "Firmware-bbb version:   ${FIRMWARE_BITBOXBASE_VERSION_FULL}")
+message(STATUS "Firmware-bbb v. (git):  ${GIT_FIRMWARE_BITBOXBASE_VERSION_STRING}")
+message(STATUS "Bootloader version:     ${BOOTLOADER_VERSION_FULL}")
 message(STATUS "Bootloader v. (git):    ${GIT_BOOTLOADER_VERSION_STRING}")
 message(STATUS "CMake version:          ${CMAKE_VERSION}")
 message(STATUS "System:                 ${CMAKE_SYSTEM}")
@@ -255,7 +296,6 @@ message(STATUS "            - Options -")
 message(STATUS "Build type:             ${CMAKE_BUILD_TYPE}")
 message(STATUS "Hardware version:       ${HARDWARE}")
 message(STATUS "Verbose:                ${CMAKE_VERBOSE_MAKEFILE}")
-message(STATUS "Documentation:          ${BUILD_DOCUMENTATION}  (make doc)")
 message(STATUS "Coverage flags:         ${COVERAGE}")
 message(STATUS "\n=============================================\n\n")
 
@@ -318,38 +358,51 @@ string(LENGTH "${CMAKE_SOURCE_DIR}/" SOURCE_PATH_SIZE)
 add_definitions("-DSOURCE_PATH_SIZE=${SOURCE_PATH_SIZE}")
 
 
-#-----------------------------------------------------------------------------
-# Build Documentation
-
-
-if(BUILD_DOCUMENTATION)
-  set(DOC_GRAPHS "YES" CACHE STRING "Create dependency graphs (needs graphviz)")
-  set(DOC_FULLGRAPHS "NO" CACHE STRING "Create call/callee graphs (large)")
-
-  find_program(DOT_PATH dot)
-
-  if(DOT_PATH STREQUAL "DOT_PATH-NOTFOUND")
-    message("Doxygen: graphviz not found - graphs disabled")
-    set(DOC_GRAPHS "NO")
-  endif()
-
-  find_package(Doxygen)
-  if(DOXYGEN_FOUND)
-    configure_file("doc/Doxyfile.in" "Doxyfile" @ONLY)
-    add_custom_target(doc
-      ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
-      WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
-      COMMENT "Generating API documentation with Doxygen.." VERBATIM)
-  endif()
+# protoc is used to generate API messages
+find_program(PROTOC protoc)
+if (PROTOC STREQUAL "PROTOC-NOTFOUND")
+  message(FATAL_ERROR "Could not find 'protoc'.")
 endif()
-
+# used when generating docs from proto files
+find_program(PROTOC_GEN_DOC protoc-gen-doc)
 
 #-----------------------------------------------------------------------------
 # Build
 
 add_subdirectory(external)
+add_subdirectory(messages)
 add_subdirectory(src)
 add_subdirectory(scripts)
+
+#-----------------------------------------------------------------------------
+# Build Documentation
+
+
+set(DOC_GRAPHS "YES" CACHE STRING "Create dependency graphs (needs graphviz)")
+set(DOC_FULLGRAPHS "NO" CACHE STRING "Create call/callee graphs (large)")
+
+find_program(DOT_PATH dot)
+
+if(DOT_PATH STREQUAL "DOT_PATH-NOTFOUND")
+  message("Doxygen: graphviz not found - graphs disabled")
+  set(DOC_GRAPHS "NO")
+endif()
+
+find_package(Doxygen)
+if(DOXYGEN_FOUND)
+  configure_file("doc/Doxyfile.in" "Doxyfile" @ONLY)
+  add_custom_target(doc
+    ${DOXYGEN_EXECUTABLE} ${CMAKE_CURRENT_BINARY_DIR}/Doxyfile
+    WORKING_DIRECTORY ${CMAKE_CURRENT_BINARY_DIR}
+    COMMENT "Generating API documentation with Doxygen.." VERBATIM)
+  add_dependencies(doc generate-protobufs)
+
+  if(NOT PROTOC_GEN_DOC STREQUAL "PROTOC_GEN_DOC-NOTFOUND")
+    add_dependencies(doc protobuf-docs)
+  endif()
+else()
+  message("Doxygen: doxygen not found - docs disabled")
+endif()
 
 if(CMAKE_CROSSCOMPILING)
   add_subdirectory(test/device-test)
@@ -362,7 +415,6 @@ else()
       # __dummy is used to always force regeneration of coverage file (There is no reasonable way to track generation of gcda files...)
       add_custom_command(
         OUTPUT gcovr/coverage.html __dummy
-        COMMAND ${CMAKE_COMMAND} --build . --target test
         COMMAND ${CMAKE_COMMAND} -E make_directory gcovr
         COMMAND ${GCOVR} --gcov-executable gcov-8 --html-details -o gcovr/coverage.html -r ${CMAKE_SOURCE_DIR} -f ${CMAKE_SOURCE_DIR}/src
       )
@@ -377,7 +429,6 @@ else()
     if(NOT LCOV STREQUAL "LOCV-NOTFOUND" AND NOT GENHTML STREQUAL "GENHTML-NOTFOUND")
       add_custom_command(
         OUTPUT lcovr/raw_coverage.info lcovr/coverage.info lcovr/index.html __dummy
-        COMMAND ${CMAKE_COMMAND} --build . --target test
         COMMAND ${CMAKE_COMMAND} -E make_directory lcovr
         COMMAND ${LCOV} --capture --directory ${CMAKE_BINARY_DIR} --output-file lcovr/raw_coverage.info
         COMMAND ${LCOV} --remove lcovr/raw_coverage.info --output-file lcovr/coverage.info '*/test/*' '*/external/*' '*/src/drivers/*' '/usr/include/*' '*/tools/*'

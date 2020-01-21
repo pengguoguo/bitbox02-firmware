@@ -13,13 +13,13 @@
 // limitations under the License.
 
 #include "usb_packet.h"
-#include "err_codes.h"
 #include "queue.h"
 #include "screen.h"
 #include "usb_processing.h"
-#include <err_codes.h>
 #include <stdbool.h>
 #include <stdlib.h>
+
+#define ERR_NONE 0
 
 /**
  * Keeps a state for the frame processing of incoming frames.
@@ -35,11 +35,6 @@ static void _reset_state(void)
     memset(&_in_state, 0, sizeof(_in_state));
 }
 
-static queue_error_t _queue_push(const uint8_t* data)
-{
-    return queue_push(queue_hww_queue(), data);
-}
-
 /**
  * Responds with an error.
  * @param[in] err The error.
@@ -48,7 +43,7 @@ static queue_error_t _queue_push(const uint8_t* data)
  */
 static void _queue_err(const uint8_t err, uint32_t cid)
 {
-    usb_frame_prepare_err(err, cid, _queue_push);
+    usb_frame_prepare_err(err, cid, queue_hww_queue());
 }
 
 static bool _need_more_data(void)
@@ -56,7 +51,16 @@ static bool _need_more_data(void)
     return (_in_state.buf_ptr - _in_state.data) < (signed)_in_state.len;
 }
 
-bool usb_packet_process(const USB_FRAME* frame, void (*send_packet)(void))
+void usb_invalid_endpoint(struct queue* queue, uint32_t cid)
+{
+    // TODO: if U2F is disabled, we used to return a 'channel busy' command.
+    // now we return an invalid cmd, because there is not going to be a matching
+    // cmd in '_registered_cmds' if the U2F bit it not set (== U2F disabled).
+    // TODO: figure out the consequences.
+    usb_frame_prepare_err(FRAME_ERR_INVALID_CMD, cid, queue);
+}
+
+bool usb_packet_process(const USB_FRAME* frame)
 {
     struct usb_processing* ctx = usb_processing_hww();
     switch (usb_frame_process(frame, &_in_state)) {
@@ -83,7 +87,8 @@ bool usb_packet_process(const USB_FRAME* frame, void (*send_packet)(void))
             // Do not send a message yet
             return true;
         }
-        if (usb_processing_enqueue(ctx, &_in_state)) {
+        if (usb_processing_enqueue(
+                ctx, _in_state.data, _in_state.len, _in_state.cmd, _in_state.cid)) {
             // Queue filled and will be sent during usb processing
             _reset_state();
             return false;
@@ -98,7 +103,5 @@ bool usb_packet_process(const USB_FRAME* frame, void (*send_packet)(void))
         _queue_err(FRAME_ERR_OTHER, frame->cid);
         break;
     }
-    // Send one of the error packets we have queued
-    send_packet();
     return false;
 }

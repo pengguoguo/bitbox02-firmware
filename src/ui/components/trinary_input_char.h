@@ -16,16 +16,15 @@
 #define _TRINARY_INPUT_CHAR_H_
 
 #include <ui/component.h>
+#include <ui/ugui/ugui.h>
 
 /**
  * Presents user input in form of three buttons at the bottom, with at most three taps needed to
- * select a character.
- * @param[in] alphabet are the available characters. Can be at most 26 chars (27 including null).
+ * select a character. Use `trinary_input_char_set_alphabet()` to set the current keyboard.
  * @param[in] character_chosen_cb will be called after a letter is chosen.
  * @param[in] parent parent component.
  */
 component_t* trinary_input_char_create(
-    const char* alphabet,
     void (*character_chosen_cb)(component_t*, char),
     component_t* parent);
 
@@ -33,9 +32,13 @@ component_t* trinary_input_char_create(
  * Set a new charset, e.g. when switching keyboards to lowercase/uppercase/numeric, or to restrict
  * the chars to facilitate entering dictionary words.
  * @param[in] alphabet_input are the available characters. Can be at most 26 chars (27
+ * @param[in] horiz_space Horizontal space between characters in a group.
  * including null).
  */
-void trinary_input_char_set_alphabet(component_t* component, const char* alphabet_input);
+void trinary_input_char_set_alphabet(
+    component_t* component,
+    const char* alphabet_input,
+    UG_S16 horiz_space);
 
 /**
  * @return whether the user user already tapped one of the buttons and has not yet chosen the

@@ -13,35 +13,37 @@
 // limitations under the License.
 
 #include "trinary_input_string.h"
+#include "confirm_button.h"
+#include "confirm_gesture.h"
+#include "keyboard_switch.h"
+#include "label.h"
+#include "left_arrow.h"
+#include "trinary_input_char.h"
+
+#include <hardfault.h>
+#include <screen.h>
+#include <touch/gestures.h>
+#include <ui/event.h>
+#include <ui/event_handler.h>
+#include <ui/fonts/password_11X12.h>
+#include <ui/ugui/ugui.h>
+#include <ui/ui_util.h>
+#include <util.h>
 
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
-
-#include "trinary_input_char.h"
-#include "ui_components.h"
-
-#include "hardfault.h"
-#include "screen.h"
-#include "util.h"
-
-#include <touch/gestures.h>
-#include <ui/event.h>
-#include <ui/event_handler.h>
-#include <ui/fonts/arial_fonts.h>
-#include <ui/ugui/ugui.h>
-#include <ui/ui_util.h>
 
 #ifndef TESTING
 #include <driver_init.h>
 #endif
 
 #define EMPTY_CHAR '_'
-#define MASK_CHAR '*'
+#define MASK_CHAR_WIDTH 6
 #define BLINK_RATE 200
 
 #define STRING_POS_X_START 5
-#define STRING_POS_Y 30
+#define STRING_POS_Y 29
 
 // After entering too many chars and exceeding the screen width, the right end of the last char will
 // end up be at this position.
@@ -49,9 +51,14 @@
 // Slide to left after exceeding this position
 #define SCROLL_RIGHT_LIMIT (SCREEN_WIDTH - 10)
 
-static char ALPHABET[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
-static char alphabet[] = "abcdefghijklmnopqrstuvwxyz";
-static char digits[] = "0123456789";
+static char _alphabet_uppercase[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+static char _alphabet_lowercase[] = "abcdefghijklmnopqrstuvwxyz";
+static char _digits[] = "0123456789";
+// ` and ~ are missing here as they don't legible on the device with arial 9x9. Can add them back
+// after tuning the font.
+static char _special_chars[] = " !\"#$%&'()*+,-./:;<=>?^[\\]@_{|}";
+
+static const UG_FONT* _font = &font_password_11X12;
 
 typedef struct {
     // Can be NULL.
@@ -72,9 +79,6 @@ typedef struct {
     UG_S16 start_x;
     // Slide to target.
     UG_S16 target_x;
-
-    // Only applies if wordlist = NULL, in which case the user can select the keyboard mode.
-    keyboard_mode_t input_mode;
 
     // Current state of input.
     size_t string_index;
@@ -109,15 +113,16 @@ static UG_S16 _constant_string_width(const component_t* component)
     data_t* data = (data_t*)component->data;
     UG_S16 width = 0;
     for (size_t i = 0; i <= data->string_index; i++) {
-        char chr;
         if (i == data->string_index) {
-            chr = EMPTY_CHAR;
+            char chr = EMPTY_CHAR;
+            width += _font->widths[chr - _font->start_char];
         } else if (!data->hide) {
-            chr = data->string[i];
+            char chr = data->string[i];
+            width += _font->widths[chr - _font->start_char];
         } else {
-            chr = MASK_CHAR;
+            width += MASK_CHAR_WIDTH;
         }
-        width += font_font_a_11X12.widths[chr - font_font_a_11X12.start_char];
+
         width += 1;
         if (data->hide) {
             width += 1;
@@ -147,7 +152,7 @@ static void _render(component_t* component)
         data->start_x += offset;
     }
 
-    UG_FontSelect(&font_font_a_11X12);
+    UG_FontSelect(_font);
     for (size_t i = 0; i <= data->string_index; i++) {
         uint8_t string_y = STRING_POS_Y;
 
@@ -161,20 +166,26 @@ static void _render(component_t* component)
         }
 
         char chr;
+        uint8_t width;
         if (i == data->string_index) {
             chr = EMPTY_CHAR;
+            width = _font->widths[chr - _font->start_char];
         } else if ((data->show_last_character && i == data->string_index - 1) || !data->hide) {
             // Show character (or only last entered character in if input is hidden).
             chr = data->string[i];
+            width = _font->widths[chr - _font->start_char];
         } else {
-            chr = MASK_CHAR;
-            // render vertically in middle, not at the top.
-            string_y += 3;
+            // ad-hoc encoding of the masked char, which will be drawn as a filled circle below.
+            chr = '\0';
+            width = MASK_CHAR_WIDTH;
         }
         if (string_x >= 0) {
-            UG_PutChar(chr, string_x, string_y, screen_front_color, screen_back_color, false);
+            if (chr == '\0') {
+                UG_FillCircle(string_x + 3, string_y + 4, 2, screen_front_color);
+            } else {
+                UG_PutChar(chr, string_x, string_y, screen_front_color, screen_back_color, false);
+            }
         }
-        const uint8_t width = font_font_a_11X12.widths[chr - font_font_a_11X12.start_char];
         string_x += width + 1;
         if (data->hide) {
             // A bit more horizontal spacing if the input is masked.
@@ -185,8 +196,7 @@ static void _render(component_t* component)
     // Draw '...' when the left part scrolled out of view.
     if (data->target_x < STRING_POS_X_START) {
         // HACK: blank out the chars rendered at this position first.
-        UG_FillFrame(
-            0, STRING_POS_Y, 11, STRING_POS_Y + font_font_a_11X12.char_height, screen_back_color);
+        UG_FillFrame(0, STRING_POS_Y, 11, STRING_POS_Y + _font->char_height, screen_back_color);
         UG_PutString(0, STRING_POS_Y, "...", false);
     }
 
@@ -229,18 +239,22 @@ static void _set_alphabet(component_t* trinary_input_string)
             }
         }
         // Since wordlist is sorted, charset is sorted automatically.
-        trinary_input_char_set_alphabet(trinary_char, charset);
+        trinary_input_char_set_alphabet(trinary_char, charset, 1);
     } else {
         // Otherwise set the input charset based on the user selected keyboard mode.
-        switch (data->input_mode) {
-        case DIGITS:
-            trinary_input_char_set_alphabet(trinary_char, digits);
-            break;
+        keyboard_mode_t keyboard_mode = keyboard_current_mode(data->keyboard_switch_component);
+        switch (keyboard_mode) {
         case LOWER_CASE:
-            trinary_input_char_set_alphabet(trinary_char, alphabet);
+            trinary_input_char_set_alphabet(trinary_char, _alphabet_lowercase, 1);
             break;
         case UPPER_CASE:
-            trinary_input_char_set_alphabet(trinary_char, ALPHABET);
+            trinary_input_char_set_alphabet(trinary_char, _alphabet_uppercase, 1);
+            break;
+        case DIGITS:
+            trinary_input_char_set_alphabet(trinary_char, _digits, 1);
+            break;
+        case SPECIAL_CHARS:
+            trinary_input_char_set_alphabet(trinary_char, _special_chars, 2);
             break;
         default:
             break;
@@ -281,7 +295,6 @@ static void _on_event(const event_t* event, component_t* component)
 
     switch (event->id) {
     case EVENT_TOGGLE_ALPHANUMERIC:
-        data->input_mode = (data->input_mode + 1) % NUM_INPUT_TYPES;
         _set_alphabet(component);
         break;
     case EVENT_BACKWARD:
@@ -352,6 +365,7 @@ static component_t* _create(
     const char* const* wordlist,
     size_t wordlist_size,
     bool hide,
+    bool special_chars,
     bool longtouch,
     void (*confirm_cb)(const char* input),
     void (*cancel_cb)(void))
@@ -376,7 +390,6 @@ static component_t* _create(
 
     data->target_x = STRING_POS_X_START;
     data->start_x = data->target_x;
-    data->input_mode = LOWER_CASE;
 
     component->data = data;
     component->parent = NULL;
@@ -393,14 +406,15 @@ static component_t* _create(
     ui_util_add_sub_component(component, data->confirm_component);
 
     if (wordlist == NULL) {
-        data->keyboard_switch_component = keyboard_switch_create(top_slider, component);
+        data->keyboard_switch_component =
+            keyboard_switch_create(top_slider, special_chars, component);
         ui_util_add_sub_component(component, data->keyboard_switch_component);
     }
 
     data->title_component = label_create(title, NULL, CENTER, component);
     ui_util_add_sub_component(component, data->title_component);
 
-    data->trinary_char_component = trinary_input_char_create("", _letter_chosen, component);
+    data->trinary_char_component = trinary_input_char_create(_letter_chosen, component);
     ui_util_add_sub_component(component, data->trinary_char_component);
     _set_alphabet(component);
     _set_can_confirm(component);
@@ -418,13 +432,14 @@ component_t* trinary_input_string_create_wordlist(
     if (wordlist == NULL) {
         Abort("trinary_input_string_\ncreate_wordlist");
     }
-    return _create(title, wordlist, wordlist_size, false, false, confirm_cb, cancel_cb);
+    return _create(title, wordlist, wordlist_size, false, false, false, confirm_cb, cancel_cb);
 }
 
 component_t* trinary_input_string_create_password(
     const char* title,
+    bool special_chars,
     void (*confirm_cb)(const char* input),
     void (*cancel_cb)(void))
 {
-    return _create(title, NULL, 0, true, true, confirm_cb, cancel_cb);
+    return _create(title, NULL, 0, true, special_chars, true, confirm_cb, cancel_cb);
 }

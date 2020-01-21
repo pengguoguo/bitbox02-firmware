@@ -23,7 +23,7 @@
 
 #include <hardfault.h>
 #include <keystore.h>
-#include <memory.h>
+#include <memory/memory.h>
 #include <securechip/securechip.h>
 #include <ui/component.h>
 #include <ui/components/trinary_choice.h>
@@ -158,7 +158,7 @@ bool workflow_restore_from_mnemonic(const RestoreFromMnemonicRequest* request)
     // the process immediately. We break out only if the user confirms.
     while (true) {
         if (!password_set(password)) {
-            if (!workflow_confirm("", "Passwords\ndo not match.\nTry again?", false, false)) {
+            if (!workflow_confirm("", "Passwords\ndo not match.\nTry again?", NULL, false, false)) {
                 return false;
             }
             continue;
@@ -169,7 +169,7 @@ bool workflow_restore_from_mnemonic(const RestoreFromMnemonicRequest* request)
         workflow_status_create("Could not\nrestore backup", false);
         return false;
     }
-#if defined(APP_U2F)
+#if APP_U2F == 1
     if (!workflow_confirm_time(request->timestamp, request->timezone_offset, false)) {
         return false;
     }

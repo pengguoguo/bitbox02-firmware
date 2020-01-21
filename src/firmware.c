@@ -13,11 +13,14 @@
 // limitations under the License.
 
 #include "common_main.h"
-#include "drivers/driver_init.h"
+#include "driver_init.h"
+#include "firmware_main_loop.h"
 #include "hardfault.h"
+#include "memory/bitbox02_smarteeprom.h"
+#include "platform_init.h"
 #include "qtouch.h"
 #include "screen.h"
-#include "ui/screen_process.h"
+#include "ui/screen_stack.h"
 #include "util.h"
 #include "workflow/workflow.h"
 
@@ -27,12 +30,15 @@ int main(void)
 {
     init_mcu();
     system_init();
+    platform_init();
     __stack_chk_guard = common_stack_chk_guard();
     screen_init();
     screen_splash();
     qtouch_init();
     common_main();
+    bitbox02_smarteeprom_init();
     traceln("%s", "Device initialized");
-    workflow_change_state(WORKFLOW_STATE_CHOOSE_ORIENTATION);
-    ui_screen_process(NULL);
+    workflow_start_orientation_screen();
+    firmware_main_loop();
+    return 0;
 }

@@ -12,18 +12,24 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <platform_config.h>
+
 #include "commander.h"
-#if defined(APP_BTC) || defined(APP_LTC)
+#if APP_BTC == 1 || APP_LTC == 1
 #include "commander/commander_btc.h"
 #endif
-#if defined(APP_ETH)
+#if APP_ETH == 1
 #include "commander/commander_eth.h"
 #endif
 #include "commander/commander_states.h"
+#if PRODUCT_BITBOX_BASE == 1
+#include "rust/bitbox02_rust.h"
+#endif
 
 #include <flags.h>
 #include <hardfault.h>
-#include <memory.h>
+#include <keystore.h>
+#include <memory/memory.h>
 #include <random.h>
 #include <screen.h>
 #include <sd.h>
@@ -69,6 +75,7 @@ static void _report_error(Response* response, commander_error_t error_code)
 
 // ------------------------------------ API ------------------------------------- //
 
+#if PLATFORM_BITBOX02 == 1
 /**
  * Retrieves a random number, displays it and encodes it into the passed stream.
  * Returns 0 if the encoding failed and the message length if the encoding was
@@ -116,7 +123,7 @@ static commander_error_t _api_get_info(DeviceInfoResponse* device_info)
 
 static commander_error_t _api_set_device_name(const SetDeviceNameRequest* request)
 {
-    if (!workflow_confirm_scrollable("Name", request->name, false)) {
+    if (!workflow_confirm_scrollable("Name", request->name, NULL, false)) {
         return COMMANDER_ERR_USER_ABORT;
     }
     if (!memory_set_device_name(request->name)) {
@@ -190,23 +197,24 @@ static commander_error_t _api_insert_remove_sdcard(const InsertRemoveSDCardReque
     return COMMANDER_OK;
 }
 
-static commander_error_t _api_set_mnemonic_passphrase_enabled(
-    const SetMnemonicPassphraseEnabledRequest* request)
+static commander_error_t _api_get_root_fingerprint(RootFingerprintResponse* response)
 {
-    if (!workflow_confirm(
-            request->enabled ? "Enable" : "Disable", "Optional\npassphrase", true, false)) {
-        return COMMANDER_ERR_USER_ABORT;
-    }
-    if (!memory_set_mnemonic_passphrase_enabled(request->enabled)) {
-        return COMMANDER_ERR_MEMORY;
+    bool success = keystore_get_root_fingerprint(response->fingerprint);
+    if (!success) {
+        return COMMANDER_ERR_GENERIC;
     }
     return COMMANDER_OK;
 }
 
-static commander_error_t _api_reboot(void)
+static commander_error_t _api_set_mnemonic_passphrase_enabled(
+    const SetMnemonicPassphraseEnabledRequest* request)
 {
-    if (!workflow_reboot()) {
-        return COMMANDER_ERR_GENERIC;
+    if (!workflow_confirm(
+            request->enabled ? "Enable" : "Disable", "Optional\npassphrase", NULL, true, false)) {
+        return COMMANDER_ERR_USER_ABORT;
+    }
+    if (!memory_set_mnemonic_passphrase_enabled(request->enabled)) {
+        return COMMANDER_ERR_MEMORY;
     }
     return COMMANDER_OK;
 }
@@ -222,6 +230,15 @@ static commander_error_t _api_reset(void)
 static commander_error_t _api_restore_from_mnemonic(const RestoreFromMnemonicRequest* request)
 {
     if (!workflow_restore_from_mnemonic(request)) {
+        return COMMANDER_ERR_GENERIC;
+    }
+    return COMMANDER_OK;
+}
+#endif
+
+static commander_error_t _api_reboot(void)
+{
+    if (!workflow_reboot()) {
         return COMMANDER_ERR_GENERIC;
     }
     return COMMANDER_OK;
@@ -246,6 +263,7 @@ static commander_error_t _parse(pb_istream_t* in_stream, Request* request)
 static commander_error_t _api_process(const Request* request, Response* response)
 {
     switch (request->which_request) {
+#if PLATFORM_BITBOX02 == 1
     case Request_random_number_tag:
         response->which_response = Response_random_number_tag;
         _api_process_random(&(response->response.random_number));
@@ -265,7 +283,7 @@ static commander_error_t _api_process(const Request* request, Response* response
     case Request_show_mnemonic_tag:
         response->which_response = Response_success_tag;
         return _api_show_mnemonic();
-#if defined(APP_BTC) || defined(APP_LTC)
+#if APP_BTC == 1 || APP_LTC == 1
     case Request_btc_pub_tag:
         response->which_response = Response_pub_tag;
         return commander_btc_pub(&(request->request.btc_pub), &(response->response.pub));
@@ -280,6 +298,9 @@ static commander_error_t _api_process(const Request* request, Response* response
     case Request_btc_sign_output_tag:
         return COMMANDER_ERR_DISABLED;
 #endif
+    case Request_fingerprint_tag:
+        response->which_response = Response_fingerprint_tag;
+        return _api_get_root_fingerprint(&(response->response.fingerprint));
     case Request_check_sdcard_tag:
         response->which_response = Response_check_sdcard_tag;
         return _api_check_sdcard(&(response->response.check_sdcard));
@@ -301,10 +322,7 @@ static commander_error_t _api_process(const Request* request, Response* response
         response->which_response = Response_check_backup_tag;
         return _api_check_backup(
             &(request->request.check_backup), &(response->response.check_backup));
-    case Request_reboot_tag:
-        response->which_response = Response_success_tag;
-        return _api_reboot();
-#if defined(APP_ETH)
+#if APP_ETH == 1
     case Request_eth_tag:
         response->which_response = Response_eth_tag;
         return commander_eth(&(request->request.eth), &(response->response.eth));
@@ -318,6 +336,15 @@ static commander_error_t _api_process(const Request* request, Response* response
     case Request_restore_from_mnemonic_tag:
         response->which_response = Response_success_tag;
         return _api_restore_from_mnemonic(&(request->request.restore_from_mnemonic));
+#endif
+#if PRODUCT_BITBOX_BASE == 1
+    case Request_bitboxbase_tag:
+        response->which_response = Response_success_tag;
+        return commander_bitboxbase(&(request->request.bitboxbase));
+#endif
+    case Request_reboot_tag:
+        response->which_response = Response_success_tag;
+        return _api_reboot();
     default:
         screen_print_debug("command unknown", 1000);
         return COMMANDER_ERR_INVALID_INPUT;

@@ -16,7 +16,7 @@
 
 #include "hardfault.h"
 #include "hww.pb.h"
-#include "memory.h"
+#include "memory/memory.h"
 
 // If non-zero (set), only this api endpoint can be called next.
 static commander_states_endpoint_id _force_next = 0;
@@ -32,6 +32,7 @@ static commander_states_endpoint_id _commands_anytime[] = {
     Request_check_sdcard_tag,
     Request_insert_remove_sdcard_tag,
     Request_list_backups_tag,
+    Request_bitboxbase_tag,
 };
 
 // api commands the host can invoke when the device is uninitialized.
@@ -52,6 +53,7 @@ static commander_states_endpoint_id _commands_seeded[] = {
 // api commands the host can invoke when the device is initialized.
 static commander_states_endpoint_id _commands_initialized[] = {
     Request_random_number_tag,
+    Request_fingerprint_tag,
     Request_btc_pub_tag,
     Request_btc_sign_init_tag,
     Request_check_backup_tag,

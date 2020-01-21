@@ -13,11 +13,12 @@
 // limitations under the License.
 
 #include "label.h"
+#include "knight_rider.h"
+
 #include <hardfault.h>
 #include <screen.h>
 #include <string.h>
 #include <touch/gestures.h>
-#include <ui/components/ui_components.h>
 #include <ui/fonts/arial_fonts.h>
 #include <ui/ugui/ugui.h>
 #include <ui/ui_util.h>
@@ -38,10 +39,51 @@ typedef struct {
     int16_t text_position_last;
 } data_t;
 
+static void _measure_label_dimensions(component_t* label);
+
 void label_update(component_t* component, const char* text)
 {
     data_t* data = (data_t*)component->data;
     snprintf(data->text, sizeof(data->text), "%s", text);
+    if (component->parent == NULL) {
+        return;
+    }
+    _measure_label_dimensions(component);
+    component_t* parent = component->parent;
+    switch (data->position) {
+    case CENTER:
+        ui_util_position_center(parent, component);
+        break;
+    case CENTER_TOP:
+        ui_util_position_center_top(parent, component);
+        break;
+    case CENTER_BOTTOM:
+        ui_util_position_center_bottom(parent, component);
+        break;
+    case LEFT_TOP:
+        ui_util_position_left_top(parent, component);
+        break;
+    case LEFT_BOTTOM:
+        ui_util_position_left_bottom(parent, component);
+        break;
+    case LEFT_CENTER:
+        ui_util_position_left_center(parent, component);
+        break;
+    case CUSTOM_OFFSET:
+        // ui_util_position_left_center_offset(parent, component, data->offset);
+        break;
+    case RIGHT_CENTER:
+        ui_util_position_right_center(parent, component);
+        break;
+    case RIGHT_TOP:
+        ui_util_position_right_top(parent, component);
+        break;
+    case RIGHT_BOTTOM:
+        ui_util_position_right_bottom(parent, component);
+        break;
+    default:
+        Abort("position undefined or currently not implemented");
+    }
 }
 
 static void _render(component_t* component)
@@ -96,7 +138,7 @@ static void _on_event(const event_t* event, component_t* component)
         case EVENT_BOTTOM_SLIDE: {
             gestures_slider_data_t* slider_data = (gestures_slider_data_t*)event->data;
             // Variable scroll speed
-            int16_t margin = SCREEN_WIDTH / 3;
+            int16_t margin = SCREEN_WIDTH / 5;
             data->slider_position_diff += SIGMOID(slider_data->velocity);
             data->text_position = data->text_position_last + (int16_t)data->slider_position_diff;
             data->text_position = MIN(
@@ -133,6 +175,28 @@ static void _cleanup(component_t* component)
     // Just in case something sensitive is shown in a label.
     util_zero(data->text, sizeof(data->text));
     ui_util_component_cleanup(component);
+}
+
+void _measure_label_dimensions(component_t* label)
+{
+    data_t* data = (data_t*)label->data;
+
+    UG_FontSetVSpace(2);
+    UG_FontSelect(data->font);
+    if (data->scrollable) {
+        UG_MeasureStringNoBreak(&(label->dimension.width), &(label->dimension.height), data->text);
+        if (label->dimension.width < SCREEN_WIDTH) {
+            // Do not scroll if text already fits in the screen
+            data->scrollable = false;
+        }
+    } else if (
+        data->position == CENTER || data->position == CENTER_TOP ||
+        data->position == CENTER_BOTTOM) {
+        UG_MeasureStringCentered(&(label->dimension.width), &(label->dimension.height), data->text);
+    } else {
+        UG_MeasureString(&(label->dimension.width), &(label->dimension.height), data->text);
+    }
+    UG_FontSetVSpace(0);
 }
 
 /********************************** Label Functions **********************************/
@@ -174,20 +238,7 @@ static component_t* _label_create(
     label->parent = parent;
     label->f = &_component_functions;
 
-    UG_FontSetVSpace(2);
-    UG_FontSelect(data->font);
-    if (data->scrollable) {
-        UG_MeasureStringNoBreak(&(label->dimension.width), &(label->dimension.height), text);
-        if (label->dimension.width < SCREEN_WIDTH) {
-            // Do not scroll if text already fits in the screen
-            data->scrollable = false;
-        }
-    } else if (position == CENTER || position == CENTER_TOP || position == CENTER_BOTTOM) {
-        UG_MeasureStringCentered(&(label->dimension.width), &(label->dimension.height), text);
-    } else {
-        UG_MeasureString(&(label->dimension.width), &(label->dimension.height), text);
-    }
-    UG_FontSetVSpace(0);
+    _measure_label_dimensions(label);
 
     if (data->scrollable) {
         ui_util_add_sub_component(label, knight_rider_create(label, SCREEN_HEIGHT - 1));

@@ -16,19 +16,22 @@
 
 #include "hardfault.h"
 #include "keystore.h"
-#include "memory.h"
+#include "memory/memory.h"
+#include "memory/smarteeprom.h"
+#include "workflow/status.h"
 #ifndef TESTING
 #include "securechip/securechip.h"
+#include <driver_init.h>
 #endif
 
-void reset_reset(void)
+void reset_reset(bool status)
 {
     keystore_lock();
 #if !defined(TESTING)
     if (!securechip_update_keys()) {
         Abort("Could not reset secure chip.");
     }
-#if defined(APP_U2F)
+#if APP_U2F == 1
     if (!securechip_u2f_counter_set(0)) {
         Abort("Could not initialize U2F counter.");
     }
@@ -37,4 +40,14 @@ void reset_reset(void)
     if (!memory_reset_hww()) {
         Abort("Could not reset memory.");
     }
+#if !defined(TESTING)
+    /* Disable SmartEEPROM, so it will be erased on next reboot. */
+    smarteeprom_disable();
+#endif
+
+    workflow_status_create("Device reset", status);
+
+#ifndef TESTING
+    _reset_mcu();
+#endif
 }

@@ -24,10 +24,9 @@
 /**
  * Processes an incoming USB packet.
  * @param[in] frame The frame that is to be processed.
- * @param[in] send_packet The function to be called to send the response packet.
  * @return true if we are waiting for more frames to complete a packet, false otherwise.
  */
-bool u2f_packet_process(const USB_FRAME* frame, void (*send_packet)(void));
+bool u2f_packet_process(const USB_FRAME* frame);
 
 /**
  * Checks if there has been a timeout
@@ -48,4 +47,11 @@ void u2f_packet_timeout_tick(void);
  * Enable timer for this cid
  */
 void u2f_packet_timeout_enable(uint32_t cid);
+
+/**
+ * Called when a message has been received, but there is no
+ * API registered to handle the requested U2F Command (endpoint) byte.
+ */
+void u2f_invalid_endpoint(struct queue* queue, uint32_t cid);
+
 #endif

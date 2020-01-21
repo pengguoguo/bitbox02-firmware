@@ -15,12 +15,11 @@
 #include "workflow.h"
 #include <backup.h>
 #include <hww.pb.h>
-#include <memory.h>
+#include <memory/memory.h>
 #include <sd.h>
 #include <stdio.h>
 #include <time.h>
 #include <ui/components/confirm.h>
-#include <ui/components/ui_components.h>
 #include <workflow/backup.h>
 #include <workflow/confirm.h>
 #include <workflow/confirm_time.h>
@@ -134,7 +133,7 @@ bool workflow_backup_check(char* id_out, bool silent)
     case BACKUP_OK:
         if (!silent) {
             workflow_status_create("Backup valid\nConfirm details", true);
-            workflow_confirm_scrollable(backup_name, id_out, true);
+            workflow_confirm_scrollable(backup_name, id_out, NULL, true);
         }
         return true;
     default: {

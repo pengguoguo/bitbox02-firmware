@@ -12,20 +12,20 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <stdbool.h>
-#include <string.h>
+#include "confirm_gesture.h"
+#include "../event.h"
+#include "../event_handler.h"
+#include "ui_images.h"
 
 #include <hardfault.h>
+#include <platform/platform_config.h>
 #include <screen.h>
 #include <touch/gestures.h>
 #include <ui/ui_util.h>
 #include <util.h>
 
-#include "confirm_gesture.h"
-
-#include "../event.h"
-#include "../event_handler.h"
-#include "ui_images.h"
+#include <stdbool.h>
+#include <string.h>
 
 #define SCALE 6 // Divide active_count by scale to slow down motion
 
@@ -97,8 +97,17 @@ static void _render(component_t* component)
  */
 static void _on_event(const event_t* event, component_t* component)
 {
+    // Avoid type casting to unknown events
+    if (event->id != EVENT_TOP_SLIDE_RELEASED && event->id != EVENT_BOTTOM_SLIDE_RELEASED &&
+        event->id != EVENT_TOP_CONTINUOUS_TAP && event->id != EVENT_BOTTOM_CONTINUOUS_TAP &&
+        event->id != EVENT_TOP_SHORT_TAP && event->id != EVENT_BOTTOM_SHORT_TAP &&
+        event->id != EVENT_TOP_LONG_TAP && event->id != EVENT_BOTTOM_LONG_TAP &&
+        event->id != EVENT_TOP_SLIDE && event->id != EVENT_BOTTOM_SLIDE) {
+        return;
+    }
     confirm_data_t* data = (confirm_data_t*)component->data;
     gestures_slider_data_t* slider_data = (gestures_slider_data_t*)event->data;
+
     switch (event->id) {
     case EVENT_TOP_SLIDE_RELEASED:
         data->active_top = false;
@@ -110,10 +119,7 @@ static void _on_event(const event_t* event, component_t* component)
         }
         break;
     case EVENT_TOP_SHORT_TAP:
-        if (slider_data->position > SLIDER_POSITION_TWO_THIRD &&
-            slider_data->position <= MAX_SLIDER_POS) {
-            data->active_top = false;
-        }
+        data->active_top = false;
         break;
     case EVENT_BOTTOM_SLIDE_RELEASED:
         data->active_bottom = false;
@@ -125,10 +131,7 @@ static void _on_event(const event_t* event, component_t* component)
         }
         break;
     case EVENT_BOTTOM_SHORT_TAP:
-        if (slider_data->position > SLIDER_POSITION_TWO_THIRD &&
-            slider_data->position <= MAX_SLIDER_POS) {
-            data->active_bottom = false;
-        }
+        data->active_bottom = false;
         break;
     default:
         break;

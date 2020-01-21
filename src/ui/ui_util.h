@@ -16,6 +16,9 @@
 #define _UI_UTIL_
 
 #include <ui/component.h>
+#include <ui/ugui/ugui.h>
+
+#define UI_UTIL_VISIBLE_SPACE_WIDTH 5
 
 enum screen_position_t {
     CENTER,

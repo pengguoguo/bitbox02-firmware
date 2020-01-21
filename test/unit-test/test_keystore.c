@@ -18,6 +18,8 @@
 #include <cmocka.h>
 
 #include <keystore.h>
+#include <memory/bitbox02_smarteeprom.h>
+#include <memory/smarteeprom.h>
 #include <secp256k1_recovery.h>
 #include <securechip/securechip.h>
 #include <util.h>
@@ -41,6 +43,19 @@ static uint8_t _mock_bip39_seed[64] = {
     0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44,
     0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x11, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22, 0x22,
     0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44, 0x44,
+};
+
+static const uint32_t _keypath[] = {
+    44 + BIP32_INITIAL_HARDENED_CHILD,
+    0 + BIP32_INITIAL_HARDENED_CHILD,
+    0 + BIP32_INITIAL_HARDENED_CHILD,
+    0,
+    5,
+};
+// seckey at the above keypath with the above bip39 seed.
+static const uint8_t _expected_seckey[32] = {
+    0x4e, 0x64, 0xdf, 0xd3, 0x3a, 0xae, 0x66, 0xc4, 0xc7, 0x52, 0x6c, 0xf0, 0x2e, 0xe8, 0xae, 0x3f,
+    0x58, 0x92, 0x32, 0x9d, 0x67, 0xdf, 0xd4, 0xad, 0x05, 0xe9, 0xc3, 0xd0, 0x6e, 0xdf, 0x74, 0xfb,
 };
 
 static uint8_t _password_salted_hashed_stretch_in[32] = {
@@ -81,6 +96,8 @@ int __real_secp256k1_ecdsa_sign_recoverable(
     secp256k1_nonce_function noncefp,
     const void* ndata);
 
+static const unsigned char* _sign_expected_msg = NULL;
+static const unsigned char* _sign_expected_seckey = NULL;
 int __wrap_secp256k1_ecdsa_sign_recoverable(
     const secp256k1_context* ctx,
     secp256k1_ecdsa_recoverable_signature* sig,
@@ -89,8 +106,14 @@ int __wrap_secp256k1_ecdsa_sign_recoverable(
     secp256k1_nonce_function noncefp,
     const void* ndata)
 {
-    check_expected(msg32);
-    check_expected(seckey);
+    if (_sign_expected_msg != NULL) {
+        assert_memory_equal(_sign_expected_msg, msg32, 32);
+        _sign_expected_msg = NULL;
+    }
+    if (_sign_expected_seckey != NULL) {
+        assert_memory_equal(_sign_expected_seckey, seckey, 32);
+        _sign_expected_seckey = NULL;
+    }
     return __real_secp256k1_ecdsa_sign_recoverable(ctx, sig, msg32, seckey, noncefp, ndata);
 }
 
@@ -123,59 +146,123 @@ bool __wrap_cipher_aes_hmac_encrypt(
     return __real_cipher_aes_hmac_encrypt(in, in_len, out, out_len, secret);
 }
 
+/** Reset the SmartEEPROM configuration. */
+static void _smarteeprom_reset(void)
+{
+    if (smarteeprom_is_enabled()) {
+        smarteeprom_disable();
+    }
+    smarteeprom_bb02_config();
+    bitbox02_smarteeprom_init();
+}
+
 static bool _reset_reset_called = false;
 void __wrap_reset_reset(void)
 {
     _reset_reset_called = true;
 }
 
-static bool _get_pubkey(const uint32_t* keypath, size_t keypath_len, secp256k1_pubkey* out)
+static bool _pubkeys_equal(
+    const secp256k1_context* ctx,
+    const secp256k1_pubkey* pubkey1,
+    const secp256k1_pubkey* pubkey2)
 {
-    struct ext_key xpub = {0};
-    if (!keystore_get_xpub(keypath, keypath_len, &xpub)) {
-        return false;
-    }
-    return secp256k1_ec_pubkey_parse(
-        wally_get_secp_context(), out, xpub.pub_key, sizeof(xpub.pub_key));
+    uint8_t pubkey1_bytes[33];
+    uint8_t pubkey2_bytes[33];
+    size_t len = 33;
+    assert_true(
+        secp256k1_ec_pubkey_serialize(ctx, pubkey1_bytes, &len, pubkey1, SECP256K1_EC_COMPRESSED));
+    assert_true(
+        secp256k1_ec_pubkey_serialize(ctx, pubkey2_bytes, &len, pubkey2, SECP256K1_EC_COMPRESSED));
+    return memcmp(pubkey1_bytes, pubkey2_bytes, len) == 0;
 }
 
-static void _test_keystore_sign_secp256k1(void** state)
+static void _test_keystore_get_xpub(void** state)
 {
-    uint32_t keypath[] = {
-        44 + BIP32_INITIAL_HARDENED_CHILD,
-        0 + BIP32_INITIAL_HARDENED_CHILD,
-        0 + BIP32_INITIAL_HARDENED_CHILD,
-        0,
-        5,
-    };
+    secp256k1_context* ctx = wally_get_secp_context();
+
+    struct ext_key xpub = {0};
+
+    mock_state(NULL, NULL);
+    // fails because keystore is locked
+    assert_false(keystore_get_xpub(_keypath, sizeof(_keypath) / sizeof(uint32_t), &xpub));
+
+    mock_state(_mock_seed, _mock_bip39_seed);
+    assert_true(keystore_get_xpub(_keypath, sizeof(_keypath) / sizeof(uint32_t), &xpub));
+
+    secp256k1_pubkey expected_pubkey;
+    assert_true(secp256k1_ec_pubkey_create(ctx, &expected_pubkey, _expected_seckey));
+
+    secp256k1_pubkey pubkey;
+    assert_true(secp256k1_ec_pubkey_parse(ctx, &pubkey, xpub.pub_key, sizeof(xpub.pub_key)));
+
+    assert_true(_pubkeys_equal(ctx, &pubkey, &expected_pubkey));
+
+    char* xpub_string;
+    // Make sure it's a public key, no
+    assert_false(bip32_key_to_base58(&xpub, BIP32_FLAG_KEY_PRIVATE, &xpub_string) == WALLY_OK);
+    assert_true(bip32_key_to_base58(&xpub, BIP32_FLAG_KEY_PUBLIC, &xpub_string) == WALLY_OK);
+    assert_string_equal(
+        xpub_string,
+        "xpub6Gmp9vKrJrVbU5JDcPRm6UmJPjTBurWfqow6w3BoK46E6mVyScMfTXd66WFeLfRa7Ug4iGMWDpWLpZAYcuUHyz"
+        "cWZCqh8393rbuMoerRK1p");
+    wally_free_string(xpub_string);
+}
+
+static void _test_keystore_get_root_fingerprint(void** state)
+{
+    mock_state(_mock_seed, _mock_bip39_seed);
+    uint8_t fingerprint[4];
+    assert_true(keystore_get_root_fingerprint(fingerprint));
+    uint8_t expected_fingerprint[4] = {0x9e, 0x1b, 0x2d, 0x1e};
+    assert_memory_equal(fingerprint, expected_fingerprint, 4);
+}
+
+static void _test_keystore_secp256k1_sign(void** state)
+{
+    secp256k1_context* ctx = wally_get_secp_context();
+
+    secp256k1_pubkey expected_pubkey;
+    assert_true(secp256k1_ec_pubkey_create(ctx, &expected_pubkey, _expected_seckey));
+
     uint8_t msg[32] = {0};
     memset(msg, 0x88, sizeof(msg));
     uint8_t sig[64] = {0};
-    secp256k1_context* ctx = wally_get_secp_context();
 
     {
+        mock_state(NULL, NULL);
         // fails because keystore is locked
         assert_false(
-            keystore_secp256k1_sign(keypath, sizeof(keypath) / sizeof(uint32_t), msg, sig, NULL));
+            keystore_secp256k1_sign(_keypath, sizeof(_keypath) / sizeof(uint32_t), msg, sig, NULL));
     }
     {
         mock_state(_mock_seed, _mock_bip39_seed);
-        // check derivation with a fixture
-        const uint8_t expected_seckey[32] = {
-            0x4e, 0x64, 0xdf, 0xd3, 0x3a, 0xae, 0x66, 0xc4, 0xc7, 0x52, 0x6c,
-            0xf0, 0x2e, 0xe8, 0xae, 0x3f, 0x58, 0x92, 0x32, 0x9d, 0x67, 0xdf,
-            0xd4, 0xad, 0x05, 0xe9, 0xc3, 0xd0, 0x6e, 0xdf, 0x74, 0xfb,
-        };
-        expect_memory(__wrap_secp256k1_ecdsa_sign_recoverable, seckey, expected_seckey, 32);
-        expect_memory(__wrap_secp256k1_ecdsa_sign_recoverable, msg32, msg, sizeof(msg));
+
+        _sign_expected_seckey = _expected_seckey;
+        _sign_expected_msg = msg;
         // check sig by verifying it against the msg.
         assert_true(
-            keystore_secp256k1_sign(keypath, sizeof(keypath) / sizeof(uint32_t), msg, sig, NULL));
-        secp256k1_pubkey pubkey = {0};
-        assert_true(_get_pubkey(keypath, sizeof(keypath) / sizeof(uint32_t), &pubkey));
+            keystore_secp256k1_sign(_keypath, sizeof(_keypath) / sizeof(uint32_t), msg, sig, NULL));
         secp256k1_ecdsa_signature secp256k1_sig = {0};
         assert_true(secp256k1_ecdsa_signature_parse_compact(ctx, &secp256k1_sig, sig));
-        assert_true(secp256k1_ecdsa_verify(ctx, &secp256k1_sig, msg, &pubkey));
+        assert_true(secp256k1_ecdsa_verify(ctx, &secp256k1_sig, msg, &expected_pubkey));
+    }
+    { // test recoverable id (recid)
+        int recid;
+        assert_true(keystore_secp256k1_sign(
+            _keypath, sizeof(_keypath) / sizeof(uint32_t), msg, sig, &recid));
+        assert_int_equal(recid, 1);
+
+        // Test recid by recovering the public key from the signature and checking against the
+        // expected puklic key.
+        secp256k1_ecdsa_recoverable_signature recoverable_sig;
+        assert_true(
+            secp256k1_ecdsa_recoverable_signature_parse_compact(ctx, &recoverable_sig, sig, recid));
+
+        secp256k1_pubkey recovered_pubkey;
+        assert_true(secp256k1_ecdsa_recover(ctx, &recovered_pubkey, &recoverable_sig, msg));
+
+        assert_true(_pubkeys_equal(ctx, &recovered_pubkey, &expected_pubkey));
     }
 }
 
@@ -222,11 +309,36 @@ static void _expect_encrypt_and_store_seed(void)
     expect_memory(__wrap_cipher_aes_hmac_encrypt, secret, expected_secret, 32);
 }
 
+#define PASSWORD ("password")
+
 static void _test_keystore_encrypt_and_store_seed(void** state)
 {
-    const char* password = "password";
     _expect_encrypt_and_store_seed();
-    assert_true(keystore_encrypt_and_store_seed(_mock_seed, 32, password));
+    assert_true(keystore_encrypt_and_store_seed(_mock_seed, 32, PASSWORD));
+}
+
+// this tests that you can create a keystore, unlock it, and then do this again. This is an expected
+// workflow for when the wallet setup process is restarted after seeding and unlocking, but before
+// creating a backup, in which case a new seed is created.
+static void _test_keystore_create_and_unlock_twice(void** state)
+{
+    _expect_encrypt_and_store_seed();
+    assert_true(keystore_encrypt_and_store_seed(_mock_seed, 32, PASSWORD));
+
+    uint8_t remaining_attempts;
+    _smarteeprom_reset();
+
+    will_return(__wrap_memory_is_seeded, true);
+    _expect_stretch(true);
+    assert_int_equal(KEYSTORE_OK, keystore_unlock(PASSWORD, &remaining_attempts));
+
+    // Create new (different) seed.
+    _expect_encrypt_and_store_seed();
+    assert_true(keystore_encrypt_and_store_seed(_mock_seed_2, 32, PASSWORD));
+
+    will_return(__wrap_memory_is_seeded, true);
+    _expect_stretch(true);
+    assert_int_equal(KEYSTORE_OK, keystore_unlock(PASSWORD, &remaining_attempts));
 }
 
 static void _expect_seeded(bool seeded)
@@ -236,63 +348,57 @@ static void _expect_seeded(bool seeded)
     assert_int_equal(seeded, keystore_copy_seed(seed, &len));
 }
 
-static void _test_keystore_unlock(void** state)
+static void _perform_some_unlocks(void)
 {
-    mock_state(NULL, NULL); // reset to locked
-
-    const char* password = "password";
-    const uint8_t max_attempts = 10;
     uint8_t remaining_attempts;
-
-    will_return(__wrap_memory_is_seeded, false);
-    assert_int_equal(KEYSTORE_ERR_GENERIC, keystore_unlock(password, &remaining_attempts));
-    _expect_encrypt_and_store_seed();
-    assert_true(keystore_encrypt_and_store_seed(_mock_seed, 32, password));
-    _expect_seeded(false);
     // Loop to check that unlocking unlocked works while unlocked.
     for (int i = 0; i < 3; i++) {
         _reset_reset_called = false;
         will_return(__wrap_memory_is_seeded, true);
         _expect_stretch(true);
-        assert_int_equal(KEYSTORE_OK, keystore_unlock(password, &remaining_attempts));
-        assert_int_equal(remaining_attempts, max_attempts);
+        assert_int_equal(KEYSTORE_OK, keystore_unlock(PASSWORD, &remaining_attempts));
+        assert_int_equal(remaining_attempts, MAX_UNLOCK_ATTEMPTS);
         assert_false(_reset_reset_called);
         _expect_seeded(true);
     }
+}
 
-    { // Test that unlocking the keystore fails if it is already unlocked and the seed changed.
-        // a) store different seed
-        _reset_reset_called = false;
-        _expect_encrypt_and_store_seed();
-        assert_true(keystore_encrypt_and_store_seed(_mock_seed_2, 32, password));
-        // b) fail to unlock (despite a correct password)
-        will_return(__wrap_memory_is_seeded, true);
-        _expect_stretch(true);
-        assert_int_equal(KEYSTORE_ERR_GENERIC, keystore_unlock(password, &remaining_attempts));
-        assert_false(_reset_reset_called);
-    }
+static void _test_keystore_unlock(void** state)
+{
+    _smarteeprom_reset();
+    mock_state(NULL, NULL); // reset to locked
+
+    uint8_t remaining_attempts;
+
+    will_return(__wrap_memory_is_seeded, false);
+    assert_int_equal(KEYSTORE_ERR_GENERIC, keystore_unlock(PASSWORD, &remaining_attempts));
+    _expect_encrypt_and_store_seed();
+    assert_true(keystore_encrypt_and_store_seed(_mock_seed, 32, PASSWORD));
+    _expect_seeded(false);
+
+    _perform_some_unlocks();
 
     // Invalid passwords until we run out of attempts.
-    for (int i = 1; i <= max_attempts; i++) {
+    for (int i = 1; i <= MAX_UNLOCK_ATTEMPTS; i++) {
         _reset_reset_called = false;
         will_return(__wrap_memory_is_seeded, true);
         _expect_stretch(false);
         assert_int_equal(
-            i >= max_attempts ? KEYSTORE_ERR_MAX_ATTEMPTS_EXCEEDED
-                              : KEYSTORE_ERR_INCORRECT_PASSWORD,
-            keystore_unlock(password, &remaining_attempts));
-        assert_int_equal(remaining_attempts, max_attempts - i);
+            i >= MAX_UNLOCK_ATTEMPTS ? KEYSTORE_ERR_MAX_ATTEMPTS_EXCEEDED
+                                     : KEYSTORE_ERR_INCORRECT_PASSWORD,
+            keystore_unlock(PASSWORD, &remaining_attempts));
+        assert_int_equal(remaining_attempts, MAX_UNLOCK_ATTEMPTS - i);
         // Wrong password does not lock the keystore again if already unlocked.
         _expect_seeded(true);
         // reset_reset() called in last attempt
-        assert_int_equal(i == max_attempts, _reset_reset_called);
+        assert_int_equal(i == MAX_UNLOCK_ATTEMPTS, _reset_reset_called);
     }
 
     // Trying again after max attempts is blocked immediately.
     _reset_reset_called = false;
     will_return(__wrap_memory_is_seeded, true);
     assert_int_equal(
-        KEYSTORE_ERR_MAX_ATTEMPTS_EXCEEDED, keystore_unlock(password, &remaining_attempts));
+        KEYSTORE_ERR_MAX_ATTEMPTS_EXCEEDED, keystore_unlock(PASSWORD, &remaining_attempts));
     assert_int_equal(remaining_attempts, 0);
     assert_true(_reset_reset_called);
 }
@@ -312,8 +418,11 @@ static void _test_keystore_lock(void** state)
 int main(void)
 {
     const struct CMUnitTest tests[] = {
-        cmocka_unit_test(_test_keystore_sign_secp256k1),
+        cmocka_unit_test(_test_keystore_get_xpub),
+        cmocka_unit_test(_test_keystore_get_root_fingerprint),
+        cmocka_unit_test(_test_keystore_secp256k1_sign),
         cmocka_unit_test(_test_keystore_encrypt_and_store_seed),
+        cmocka_unit_test(_test_keystore_create_and_unlock_twice),
         cmocka_unit_test(_test_keystore_unlock),
         cmocka_unit_test(_test_keystore_lock),
     };

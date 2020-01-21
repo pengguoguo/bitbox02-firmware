@@ -18,11 +18,12 @@
 #include <string.h>
 
 #include <keystore.h>
-#include <memory.h>
+#include <memory/memory.h>
 #include <random.h>
 #include <securechip/securechip.h>
 #include <ui/component.h>
 #include <ui/components/confirm.h>
+#include <ui/components/info_centered.h>
 #include <ui/screen_process.h>
 #include <ui/screen_stack.h>
 #include <usb/u2f/u2f.h>
@@ -35,7 +36,6 @@
 #include <workflow/status.h>
 #include <workflow/unlock.h>
 
-#define U2F_HIJACK_ORIGIN_TOTAL 4
 #define APPID_BOGUS_CHROMIUM "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA"
 #define APPID_BOGUS_FIREFOX "\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0\0"
 
@@ -54,33 +54,6 @@ typedef struct {
 #endif
 
 static uint32_t _cid = 0;
-// TODO: Implement hijack
-static const uint8_t _hijack_code[U2F_HIJACK_ORIGIN_TOTAL][U2F_APPID_SIZE] = {
-    {
-        /* Corresponds to U2F client challenge filled with `0xdb` */
-        /* Origin `https://digitalbitbox.com` */
-        0x17, 0x9d, 0xc3, 0x1c, 0x3a, 0xd4, 0x0f, 0x05, 0xf0, 0x71, 0x71,
-        0xed, 0xf4, 0x46, 0x4a, 0x71, 0x0a, 0x2d, 0xd4, 0xde, 0xc7, 0xe6,
-        0x14, 0x41, 0xc5, 0xbd, 0x24, 0x97, 0x8a, 0x99, 0x2a, 0x1a,
-    },
-    {
-        /* Origin `https://www.myetherwallet.com` */
-        0x8e, 0x57, 0xf6, 0x48, 0xb9, 0x1b, 0x24, 0xfe, 0x27, 0x92, 0x3a,
-        0x75, 0xef, 0xa1, 0xd0, 0x62, 0xdc, 0xb5, 0x4d, 0x41, 0xfd, 0x0b,
-        0xee, 0x33, 0x9e, 0xf2, 0xa2, 0xb4, 0x55, 0x0c, 0xbe, 0x05,
-    },
-    {
-        /* Origin `https://vintage.myetherwallet.com` */
-        0x0f, 0x5b, 0x76, 0xef, 0x29, 0x8f, 0x15, 0x0b, 0x4d, 0x39, 0x9d,
-        0x2c, 0x3c, 0xb9, 0x0e, 0x86, 0x54, 0xa3, 0x7c, 0x60, 0x5f, 0x73,
-        0x35, 0x68, 0xee, 0x68, 0xec, 0x41, 0x48, 0x8d, 0x53, 0x14,
-    },
-    {
-        /* Origin `https://mycrypto.com` */
-        0xbd, 0x22, 0x66, 0x24, 0x02, 0x18, 0x8c, 0x4d, 0xba, 0x4b, 0xb3,
-        0xd7, 0xe3, 0x98, 0x00, 0x7c, 0x5b, 0x98, 0x6f, 0x46, 0x27, 0x1f,
-        0x6d, 0xf9, 0x2e, 0x24, 0x01, 0xa7, 0xce, 0xfd, 0x1a, 0xa8,
-    }};
 
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wpacked"
@@ -102,6 +75,57 @@ typedef struct __attribute__((__packed__)) {
 } U2F_AUTHENTICATE_SIG_STR;
 
 #pragma GCC diagnostic pop
+
+static component_t* _create_refresh_webpage(void)
+{
+    return info_centered_create("Refresh webpage", NULL);
+}
+
+static component_t* _nudge_label = NULL;
+
+static void _nudge_label_cb(component_t* component)
+{
+    if (ui_screen_stack_top() == component->parent) {
+        _nudge_label = NULL;
+        ui_screen_stack_pop();
+    }
+}
+
+static void _create_nudge_label(void)
+{
+    if (!_nudge_label) {
+        _nudge_label =
+            info_centered_create("Initialize with BitBoxApp\nto use U2F", _nudge_label_cb);
+    }
+    if (ui_screen_stack_top() != _nudge_label) {
+        ui_screen_stack_push(_nudge_label);
+    }
+}
+
+// Returns false if the parent function should return U2F_SW_CONDITIONS_NOT_SATISFIED
+static bool _unlock_or_show_refresh_screen(void)
+{
+    static component_t* refresh_webpage = NULL;
+    if (keystore_is_locked()) {
+        // Unfortunately unlocking takes more time than U2F is allowed to take. With the current
+        // architecture of the firmware we cannot run it concurrently to other requests. Therefore
+        // we will call it here, make the user unlock the device and then ask the user to refresh
+        // the webpage. (refreshing is only needed for some browsers)
+        if (!workflow_unlock()) {
+            workflow_async_busy_clear();
+            return false;
+        }
+        refresh_webpage = _create_refresh_webpage();
+        ui_screen_stack_push(refresh_webpage);
+        return false;
+    }
+    // Pop the "refresh webpage" screen
+    if (ui_screen_stack_top() && ui_screen_stack_top() == refresh_webpage) {
+        refresh_webpage = NULL;
+        ui_screen_stack_pop();
+    }
+    return true;
+}
 
 static uint32_t _next_cid(void)
 {
@@ -269,16 +293,31 @@ static void _register(const USB_APDU* apdu, Packet* out_packet)
         return;
     }
 
-    // If the authentication fails with the "Bad key handle" the browser will execute bogus
-    // registrations to make the device blink.
-    bool is_bogus = MEMEQ(reg_request->appId, APPID_BOGUS_CHROMIUM, U2F_APPID_SIZE) ||
-                    MEMEQ(reg_request->appId, APPID_BOGUS_FIREFOX, U2F_APPID_SIZE);
-    if (!u2f_app_confirm(is_bogus ? U2F_APP_BOGUS : U2F_APP_REGISTER, reg_request->appId)) {
+    if (!memory_is_initialized()) {
+        _create_nudge_label();
+        workflow_async_busy_clear();
         _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
         return;
     }
 
-    if (!workflow_unlock()) {
+    // If it fails to unlock it will call workflow_async_busy_clear
+    if (!_unlock_or_show_refresh_screen()) {
+        _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
+        return;
+    }
+
+    // If the authentication fails with the "Bad key handle" the browser will execute bogus
+    // registrations to make the device blink.
+    bool is_bogus = MEMEQ(reg_request->appId, APPID_BOGUS_CHROMIUM, U2F_APPID_SIZE) ||
+                    MEMEQ(reg_request->appId, APPID_BOGUS_FIREFOX, U2F_APPID_SIZE);
+    bool result = false;
+    if (u2f_app_confirm(is_bogus ? U2F_APP_BOGUS : U2F_APP_REGISTER, reg_request->appId, &result) ==
+        WORKFLOW_ASYNC_NOT_READY) {
+        _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
+        return;
+    }
+    if (!result) {
+        workflow_async_busy_clear();
         _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
         return;
     }
@@ -333,13 +372,7 @@ static void _register(const USB_APDU* apdu, Packet* out_packet)
     size_t len =
         1 /* registerId */ + U2F_EC_POINT_SIZE + 1 /* keyhandleLen */ + kh_cert_sig_len + 2;
     _fill_message(data, len, out_packet);
-}
-
-static void _hijack(const U2F_AUTHENTICATE_REQ* req, Packet* out_packet)
-{
-    // TODO - copy from v1 once finalized
-    (void)req;
-    (void)out_packet;
+    workflow_async_busy_clear();
 }
 
 static void _authenticate(const USB_APDU* apdu, Packet* out_packet)
@@ -357,19 +390,19 @@ static void _authenticate(const USB_APDU* apdu, Packet* out_packet)
         return;
     }
 
-    if (!workflow_unlock()) {
+    if (!memory_is_initialized()) {
+        _create_nudge_label();
+        workflow_async_busy_clear();
         _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
         return;
     }
 
-    for (uint8_t i = 0; i < U2F_HIJACK_ORIGIN_TOTAL; i++) {
-        // As an alternative interface, hijack the U2F AUTH key handle data field.
-        // Slower but works in browsers for specified sites without requiring an extension.
-        if (MEMEQ(auth_request->appId, _hijack_code[i], U2F_APPID_SIZE)) {
-            _hijack(auth_request, out_packet);
-            return;
-        }
+    // If it fails to unlock it will call workflow_async_busy_clear
+    if (!_unlock_or_show_refresh_screen()) {
+        _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
+        return;
     }
+
     memcpy(nonce, auth_request->keyHandle + sizeof(mac), sizeof(nonce));
     if (!_keyhandle_gen(auth_request->appId, nonce, privkey, mac)) {
         _error(U2F_SW_WRONG_DATA, out_packet);
@@ -389,7 +422,14 @@ static void _authenticate(const USB_APDU* apdu, Packet* out_packet)
         return;
     }
 
-    if (!u2f_app_confirm(U2F_APP_AUTHENTICATE, auth_request->appId)) {
+    bool result = false;
+    if (u2f_app_confirm(U2F_APP_AUTHENTICATE, auth_request->appId, &result) ==
+        WORKFLOW_ASYNC_NOT_READY) {
+        _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
+        return;
+    }
+    if (!result) {
+        workflow_async_busy_clear();
         _error(U2F_SW_CONDITIONS_NOT_SATISFIED, out_packet);
         return;
     }
@@ -431,6 +471,7 @@ static void _authenticate(const USB_APDU* apdu, Packet* out_packet)
     memcpy(buf + auth_packet_len, "\x90\x00", 2);
 
     _fill_message(buf, auth_packet_len + 2, out_packet);
+    workflow_async_busy_clear();
 }
 
 static void _cmd_ping(const Packet* in_packet, Packet* out_packet, const size_t max_out_len)
@@ -465,8 +506,10 @@ static void _cmd_wink(const Packet* in_packet, Packet* out_packet, const size_t 
         _error_hid(in_packet->cid, U2FHID_ERR_INVALID_LEN, out_packet);
         return;
     }
-
-    workflow_status_create("U2F Wink", true);
+    // Chromebook chrome sends winks between register/authentication commands
+    if (!workflow_async_busy_check()) {
+        workflow_status_create("U2F wink", true);
+    }
 
     util_zero(out_packet->data_addr, sizeof(out_packet->data_addr));
     out_packet->len = 0;
@@ -535,9 +578,11 @@ static void _cmd_msg(const Packet* in_packet, Packet* out_packet, const size_t m
 
     switch (apdu->ins) {
     case U2F_REGISTER:
+        workflow_async_busy_set();
         _register(apdu, out_packet);
         break;
     case U2F_AUTHENTICATE:
+        workflow_async_busy_set();
         _authenticate(apdu, out_packet);
         break;
     case U2F_VERSION:

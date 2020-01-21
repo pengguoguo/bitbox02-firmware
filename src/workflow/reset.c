@@ -15,7 +15,6 @@
 #include "reset.h"
 #include "confirm.h"
 #include "password.h"
-#include "status.h"
 #include "workflow.h"
 
 #include <reset.h>
@@ -25,13 +24,10 @@ bool workflow_reset(void)
     if (!password_check()) {
         return false;
     }
-    if (!workflow_confirm("RESET", "Proceed to\nfactory reset?", true, false)) {
+    if (!workflow_confirm("RESET", "Proceed to\nfactory reset?", NULL, true, false)) {
         return false;
     }
 
-    reset_reset();
-    workflow_status_create("Device reset", true);
-    workflow_start();
-
+    reset_reset(true);
     return true;
 }

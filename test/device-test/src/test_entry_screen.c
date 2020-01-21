@@ -16,13 +16,16 @@
 #include <stdint.h>
 #include <string.h>
 
+#include <driver_init.h>
+#include <firmware_main_loop.h>
 #include <screen.h>
 #include <touch/gestures.h>
-#include <ui/components/ui_components.h>
+#include <ui/components/entry_screen.h>
 #include <ui/event.h>
 #include <ui/event_handler.h>
-#include <ui/screen_process.h>
+#include <ui/fonts/arial_fonts.h>
 #include <ui/screen_stack.h>
+#include <ui/ui_util.h>
 
 #include "hardfault.h"
 #include "qtouch.h"
@@ -128,7 +131,7 @@ int main(void)
     screen_init();
     qtouch_init();
     ui_screen_stack_push(entry_screen_create("Enter password", done_callback));
-    ui_screen_process(NULL);
+    firmware_main_loop();
 }
 
 #pragma GCC diagnostic pop

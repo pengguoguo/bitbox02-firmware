@@ -18,7 +18,7 @@
 
 #include <hardfault.h>
 #include <touch/gestures.h>
-#include <ui/fonts/arial_fonts.h>
+#include <ui/fonts/password_9X9.h>
 #include <ui/ui_util.h>
 #include <util.h>
 
@@ -35,9 +35,9 @@ typedef struct {
 } _element_t;
 
 // excluding null terminator
-#define MAX_CHARS 26
+#define MAX_CHARS 33
 
-static const UG_FONT* _font = &font_font_a_9X9;
+static const UG_FONT* _font = &font_password_9X9;
 
 // Each of the three groups can occupy roughly a third of the width.
 static const UG_S16 _group_width = SCREEN_WIDTH / 3;
@@ -56,23 +56,38 @@ typedef struct {
     bool in_progress;
     // true if there are no available characters
     bool alphabet_is_empty;
+    // Horizontal space between characters in a group.
+    UG_S16 horiz_space;
 } data_t;
 
-static void _set_alphabet(component_t* component, const char* alphabet)
+/**
+ * Called when a selection on one of the alphabet options has been made.
+ *
+ * If the selected alphabet is a single letter, the input is completed.
+ * Otherwise, the selected alphabet replaces the current one and the
+ * input continues.
+ */
+static void _alphabet_selected(component_t* component, const char* alphabet)
 {
     data_t* data = (data_t*)component->data;
     size_t len = strlens(alphabet);
     if (len == 0) {
+        /* No letters available in this section of the screen. */
         return;
     }
     if (len == 1) {
-        // Reset elements so that the previous letters don't slide back on a new alphabet.
+        /*
+         * Reset elements so that the previous letters don't slide back
+         * on a new alphabet.
+         */
         memset(data->elements, 0, sizeof(data->elements));
         data->character_chosen_cb(component, alphabet[0]);
         data->in_progress = false;
-        return;
+    } else {
+        /* Select a sub-alphabet. */
+        trinary_input_char_set_alphabet(component, alphabet, data->horiz_space);
+        data->in_progress = true;
     }
-    trinary_input_char_set_alphabet(component, alphabet);
 }
 
 static void _on_event(const event_t* event, component_t* component)
@@ -82,16 +97,15 @@ static void _on_event(const event_t* event, component_t* component)
     }
     data_t* data = (data_t*)component->data;
     gestures_slider_data_t* slider_data = (gestures_slider_data_t*)event->data;
+    const char* selected_alphabet;
     if (slider_data->position <= SLIDER_POSITION_ONE_THIRD) {
-        _set_alphabet(component, data->left_alphabet);
-        data->in_progress = true;
+        selected_alphabet = data->left_alphabet;
     } else if (slider_data->position <= SLIDER_POSITION_TWO_THIRD) {
-        _set_alphabet(component, data->middle_alphabet);
-        data->in_progress = true;
+        selected_alphabet = data->middle_alphabet;
     } else {
-        _set_alphabet(component, data->right_alphabet);
-        data->in_progress = true;
+        selected_alphabet = data->right_alphabet;
     }
+    _alphabet_selected(component, selected_alphabet);
 }
 
 static void _render(component_t* component)
@@ -155,11 +169,10 @@ static const component_functions_t _component_functions = {
 static void _put_string(
     UG_S16 x_offset,
     UG_S16 y_offset,
+    UG_S16 horiz_space,
     _element_t** elements,
     size_t elements_size)
 {
-    UG_S16 horiz_space = 1;
-
     UG_S16 total_width = 0;
     for (size_t idx = 0; idx < elements_size; idx++) {
         char c = elements[idx]->character;
@@ -168,35 +181,22 @@ static void _put_string(
     }
 
     // Split into two rows of roughly equal size by number of elements if too big.
-    if (elements_size > 5) {
+    if (elements_size > 6) {
         // split in two halfs; size/2 rounded up
         const size_t half = (elements_size + 1) / 2;
-        _put_string(x_offset, y_offset - _font->char_height, elements, half);
-        _put_string(x_offset, y_offset, elements + half, elements_size - half);
+        _put_string(x_offset, y_offset - _font->char_height - 1, horiz_space, elements, half);
+        _put_string(x_offset, y_offset, horiz_space, elements + half, elements_size - half);
         return;
     }
-
-    // Split into two rows of roughly equal size by width if too big.
-    /* if (total_width > _group_width) { */
-    /*     UG_S16 half_width = 0; */
-    /*     for (size_t idx = 0; idx < elements_size; idx++) { */
-    /*         char c = elements[idx]->character; */
-    /*         half_width += _font->widths[c - _font->start_char]; */
-    /*         half_width += horiz_space; */
-    /*         if ((half_width - horiz_space) > total_width / 2) { */
-    /*             _put_string(x_offset, y_offset - _font->char_height, elements, idx); */
-    /*             _put_string(x_offset, y_offset, elements + idx, elements_size - idx); */
-    /*             return; */
-    /*         } */
-    /*     } */
-    /* } */
 
     UG_S16 x = x_offset + _group_width / 2 - total_width / 2;
     for (size_t idx = 0; idx < elements_size; idx++) {
         _element_t* element = elements[idx];
+        char c = elements[idx]->character;
         bool update_position = !element->newly_born;
         element->target_x = x;
-        x += _font->widths[element->character - _font->start_char];
+        x += c == ' ' ? UI_UTIL_VISIBLE_SPACE_WIDTH
+                      : _font->widths[element->character - _font->start_char];
         x += horiz_space;
         element->target_y = y_offset;
         if (!update_position) {
@@ -206,42 +206,13 @@ static void _put_string(
     }
 }
 
-static void _align_left(_element_t** elements, size_t elements_size)
-{
-    UG_S16 min_x = SCREEN_WIDTH;
-    for (size_t idx = 0; idx < elements_size; idx++) {
-        const _element_t* element = elements[idx];
-        if (element->target_x < min_x) {
-            min_x = element->target_x;
-        }
-    }
-    const UG_S16 padding = 5;
-    for (size_t idx = 0; idx < elements_size; idx++) {
-        _element_t* element = elements[idx];
-        element->target_x -= min_x - padding;
-    }
-}
-
-static void _align_right(_element_t** elements, size_t elements_size)
-{
-    UG_S16 max_x = 0;
-    for (size_t idx = 0; idx < elements_size; idx++) {
-        const _element_t* element = elements[idx];
-        const UG_S16 x = element->target_x + _font->widths[element->character - _font->start_char];
-        if (x > max_x) {
-            max_x = x;
-        }
-    }
-    const UG_S16 padding = 5;
-    for (size_t idx = 0; idx < elements_size; idx++) {
-        _element_t* element = elements[idx];
-        element->target_x += SCREEN_WIDTH - max_x - padding;
-    }
-}
-
-void trinary_input_char_set_alphabet(component_t* component, const char* alphabet_input)
+void trinary_input_char_set_alphabet(
+    component_t* component,
+    const char* alphabet_input,
+    UG_S16 horiz_space)
 {
     data_t* data = (data_t*)component->data;
+    data->horiz_space = horiz_space;
     // copy so that alphabet_input can overlap with left_alphabet, middle_alphabet, right_alphabet
     // overwritten below.
     char alphabet[MAX_CHARS + 1];
@@ -297,18 +268,19 @@ void trinary_input_char_set_alphabet(component_t* component, const char* alphabe
 
     UG_S16 y_offset = SCREEN_HEIGHT - _font->char_height;
     { // left
-        _put_string(0, y_offset, elements_lookup, left_size);
-        //_align_left(elements_lookup, left_size);
-        (void)_align_left;
+        _put_string(0, y_offset, data->horiz_space, elements_lookup, left_size);
     }
     { // middle
-        _put_string(_group_width, y_offset, elements_lookup + left_size, middle_size);
+        _put_string(
+            _group_width, y_offset, data->horiz_space, elements_lookup + left_size, middle_size);
     }
     { // right
         _put_string(
-            2 * _group_width, y_offset, elements_lookup + left_size + middle_size, right_size);
-        //_align_right(elements_lookup + left_size + middle_size, right_size);
-        (void)_align_right;
+            2 * _group_width,
+            y_offset,
+            data->horiz_space,
+            elements_lookup + left_size + middle_size,
+            right_size);
     }
 
     snprintf(data->left_alphabet, sizeof(data->left_alphabet), "%.*s", (int)left_size, alphabet);
@@ -332,7 +304,6 @@ void trinary_input_char_set_alphabet(component_t* component, const char* alphabe
 /********************************** Create Instance **********************************/
 
 component_t* trinary_input_char_create(
-    const char* alphabet,
     void (*character_chosen_cb)(component_t*, char),
     component_t* parent)
 {
@@ -354,8 +325,6 @@ component_t* trinary_input_char_create(
     component->dimension.height = SCREEN_HEIGHT;
 
     data->character_chosen_cb = character_chosen_cb;
-
-    trinary_input_char_set_alphabet(component, alphabet);
 
     return component;
 }

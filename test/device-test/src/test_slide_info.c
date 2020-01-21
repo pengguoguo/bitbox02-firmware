@@ -15,12 +15,12 @@
 #include "qtouch.h"
 #include "random.h"
 #include "util.h"
-#include <drivers/driver_init.h>
+#include <driver_init.h>
+#include <firmware_main_loop.h>
 #include <screen.h>
 #include <string.h>
 #include <touch/gestures.h>
-#include <ui/components/ui_components.h>
-#include <ui/screen_process.h>
+#include <ui/components/label.h>
 #include <ui/screen_stack.h>
 #include <usb/usb.h>
 
@@ -127,7 +127,7 @@ int main(void)
 
     component_t* test_slide_screen = test_slide_create();
     ui_screen_stack_push(test_slide_screen);
-    ui_screen_process(NULL);
+    firmware_main_loop();
 }
 
 #pragma GCC diagnostic pop

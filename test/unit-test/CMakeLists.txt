@@ -18,29 +18,37 @@
 
 set(CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-unused-parameter -Wno-missing-prototypes -Wno-missing-declarations -Wno-implicit-function-declaration -Wno-bad-function-cast")
 
-set(FILTERED_SOURCES "")
-foreach(file IN ITEMS ${DBB-FIRMWARE-UI-SOURCES})
-  if(NOT ${file} MATCHES "src/screen.c$" AND NOT ${file} MATCHES "ugui.c$")
-  set(FILTERED_SOURCES
-    ${FILTERED_SOURCES}
-    ${file}
+set(DBB-FILTERED-SOURCES
+  ${DBB-FIRMWARE-SOURCES}
+  ${DBB-FIRMWARE-UI-SOURCES}
+  ${DBB-FIRMWARE-PROTOBUF-SOURCES}
+  ${FIRMWARE-U2F-SOURCES}
+  ${DBB-FIRMWARE-USB-SOURCES}
+  ${DBB-FIRMWARE-USART-SOURCES}
   )
-  endif()
-endforeach(file)
-set(DBB-FIRMWARE-UI-SOURCES ${FILTERED_SOURCES})
+
+set(IGNORE_SOURCES
+    "src/screen.c"
+    "src/ui/ugui/ugui.c"
+    "src/memory/nvmctrl.c"
+    "src/memory/smarteeprom.c"
+    )
+
+# Exclude some files which depends on the hardware.
+foreach(SOURCEFILE ${IGNORE_SOURCES})
+    list(FILTER DBB-FILTERED-SOURCES EXCLUDE REGEX ".*/${SOURCEFILE}$")
+endforeach()
+
+message("FILTERED SOURCES: ${DBB-FILTERED-SOURCES}")
 
 set(CMAKE_MODULE_PATH ${CMAKE_SOURCE_DIR}/tools/nanopb/extra)
 find_package(Nanopb REQUIRED)
 
 add_library(bitbox
   STATIC
-  ${DBB-FIRMWARE-SOURCES}
-  ${DBB-FIRMWARE-UI-SOURCES}
-  ${DBB-FIRMWARE-PROTOBUF-SOURCES}
-  ${DBB-FIRMWARE-USB-SOURCES}
+  ${DBB-FILTERED-SOURCES}
   ${CTAES-SOURCES}
   ${ETHEREUM-SOURCES}
-  ${FIRMWARE-U2F-SOURCES}
   framework/mock_blocking.c
   framework/mock_screen.c
   framework/mock_screen_stack.c
@@ -51,7 +59,9 @@ add_library(bitbox
   framework/mock_component.c
   framework/mock_ff.c
   framework/mock_sd.c
+  framework/mock_smarteeprom.c
   framework/mock_securechip.c
+  framework/btc_util.c
 )
 
 target_include_directories(
@@ -59,12 +69,8 @@ target_include_directories(
   SYSTEM PUBLIC
   ${SYSTEMINCLUDES}
   ${CMAKE_SOURCE_DIR}/external
-  ${CMAKE_SOURCE_DIR}/external/noise-c/include
-  ${CMAKE_SOURCE_DIR}/external/noise-c/src
   ${CMAKE_SOURCE_DIR}/external/ctaes
   ${CMAKE_SOURCE_DIR}/external/sha3
-  ${CMAKE_SOURCE_DIR}/external/libwally-core/include
-  ${CMAKE_SOURCE_DIR}/external/libwally-core/src/secp256k1/include
 )
 target_include_directories(
   bitbox
@@ -76,20 +82,33 @@ target_include_directories(
 )
 
 set_source_files_properties(
-  ${CMAKE_BINARY_DIR}/src/hww.pb.c
-  ${CMAKE_BINARY_DIR}/src/backup.pb.c
+  ${DBB-FIRMWARE-PROTOBUF-SOURCES}
   PROPERTIES GENERATED TRUE
 )
 target_include_directories(bitbox SYSTEM PUBLIC ${NANOPB_INCLUDE_DIRS})
+target_include_directories(bitbox PRIVATE ${CMAKE_SOURCE_DIR}/external/FatFs/source)
 target_compile_definitions(bitbox PUBLIC "PB_NO_PACKED_STRUCTS=1" "PB_FIELD_16BIT=1")
-target_compile_definitions(bitbox PUBLIC APP_BTC APP_LTC APP_U2F APP_ETH)
-add_dependencies(bitbox generate-hww generate-backup)
+target_compile_definitions(bitbox PUBLIC "PRODUCT_BITBOX_MULTI=1" "APP_BTC=1" "APP_LTC=1" "APP_U2F=1" "APP_ETH=1")
+add_dependencies(bitbox generate-protobufs)
 
-target_compile_definitions(bitbox PUBLIC "TESTING")
-target_compile_definitions(bitbox PUBLIC "USE_KECCAK")
-
+# Since noiseprotocol and wallycore are external projects we need to specify the dependency
 add_dependencies(bitbox noise-c)
 add_dependencies(bitbox libwally-core)
+
+target_compile_definitions(bitbox PUBLIC TESTING)
+
+target_link_libraries(bitbox
+  PUBLIC
+    noiseprotocol
+    wallycore
+    secp256k1
+    bignum
+  PRIVATE
+    base32
+    ctaes
+    sha3
+)
+
 if(SANITIZE_ADDRESS)
   target_compile_options(bitbox PUBLIC "-fsanitize=address")
 endif()
@@ -100,10 +119,6 @@ if(COVERAGE)
   target_link_libraries(bitbox PUBLIC "--coverage")
   target_compile_options(bitbox PUBLIC "--coverage")
 endif()
-
-target_link_libraries(bitbox PRIVATE "noiseprotocol")
-target_link_libraries(bitbox PRIVATE "wallycore")
-target_link_libraries(bitbox PRIVATE "secp256k1")
 
 add_library(u2f-util
   STATIC
@@ -124,7 +139,7 @@ target_include_directories(
   ${INCLUDES}
   ${CMAKE_BINARY_DIR}/src
 )
-target_compile_definitions(u2f-util PUBLIC "TESTING")
+target_compile_definitions(u2f-util PUBLIC "TESTING" PRODUCT_BITBOX_MULTI "APP_U2F=1" "APP_BTC=1" "APP_LTC=1" "APP_ETH=1")
 target_compile_definitions(u2f-util PUBLIC "USE_KECCAK")
 
 
@@ -146,10 +161,14 @@ set(TEST_LIST
    ""
    random
    "-Wl,--wrap=rand,--wrap=wally_sha256"
+   apps_common_bip32
+   ""
    app_btc
    "-Wl,--wrap=keystore_get_xpub,--wrap=btc_common_is_valid_keypath,--wrap=btc_common_encode_xpub,--wrap=btc_common_outputhash_from_pubkeyhash"
    app_btc_common
    ""
+   app_btc_confirm_locktime_rbf
+   "-Wl,--wrap=workflow_confirm,--wrap=workflow_status_create"
    sd
    ""
    ui_components
@@ -159,7 +178,7 @@ set(TEST_LIST
    ui_component_gestures
    ""
    btc_sign
-   "-Wl,--wrap=workflow_verify_recipient,--wrap=workflow_verify_total,--wrap=btc_common_format_amount"
+   "-Wl,--wrap=workflow_verify_recipient,--wrap=workflow_verify_total,--wrap=apps_btc_confirm_locktime_rbf,--wrap=btc_common_format_amount,--wrap=btc_common_is_valid_keypath"
    memory
    "-Wl,--wrap=memory_read_chunk_mock,--wrap=memory_write_chunk_mock,--wrap=bb_noise_generate_static_private_key,--wrap=memory_read_shared_bootdata_mock,--wrap=memory_write_to_address_mock"
    salt
@@ -179,9 +198,11 @@ set(TEST_LIST
    app_eth_sighash
    ""
    app_eth_sign
-   "-Wl,--wrap=app_eth_verify_standard_transaction,--wrap=app_eth_verify_erc20_transaction,--wrap=keystore_secp256k1_sign"
+   "-Wl,--wrap=app_eth_verify_standard_transaction,--wrap=app_eth_verify_erc20_transaction,--wrap=keystore_secp256k1_sign,--wrap=eth_common_is_valid_keypath"
    app_eth_verify
    "-Wl,--wrap=workflow_verify_recipient,--wrap=workflow_verify_total,--wrap=app_eth_erc20_params_get"
+   usart
+   "-Wl,--wrap=usb_processing_enqueue"
    util
    ""
    commander_set_device_name
@@ -189,7 +210,7 @@ set(TEST_LIST
    commander_set_mnemonic_passphrase_enabled
    "-Wl,--wrap=workflow_confirm,--wrap=memory_set_mnemonic_passphrase_enabled"
    workflow_blocking
-   "-Wl,--wrap=ui_screen_process,--wrap=ui_screen_process_with_timeout"
+   "-Wl,--wrap=screen_process"
    workflow_status
    "-Wl,--wrap=ui_screen_stack_push,--wrap=ui_screen_stack_pop,--wrap=status_create,--wrap=workflow_blocking_block,--wrap=workflow_blocking_unblock"
    workflow_cancel

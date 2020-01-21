@@ -18,15 +18,24 @@
 #include <screen.h>
 #include <ui/component.h>
 
-typedef enum { DIGITS, LOWER_CASE, UPPER_CASE, NUM_INPUT_TYPES } keyboard_mode_t;
+typedef enum { LOWER_CASE, UPPER_CASE, DIGITS, SPECIAL_CHARS } keyboard_mode_t;
 
 /********************************** Create Instance **********************************/
 
 /**
  * Creates a keyboard switch component.
  * @param[in] location The slider location.
+ * @param[in] make special chars keyboard mode available.
  * @param[in] parent The parent component.
  */
-component_t* keyboard_switch_create(slider_location_t location, component_t* parent);
+component_t* keyboard_switch_create(
+    slider_location_t location,
+    bool special_chars,
+    component_t* parent);
+
+/**
+ * @return the currently selected keyboard
+ */
+keyboard_mode_t keyboard_current_mode(const component_t* component);
 
 #endif

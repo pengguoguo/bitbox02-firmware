@@ -12,11 +12,11 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
-#include <drivers/driver_init.h>
+#include <driver_init.h>
+#include <firmware_main_loop.h>
 #include <screen.h>
 #include <string.h>
-#include <ui/components/ui_components.h>
-#include <ui/screen_process.h>
+#include <ui/components/scroll_through_all_variants.h>
 #include <ui/screen_stack.h>
 #include <usb/usb.h>
 
@@ -50,7 +50,7 @@ int main(void)
         scroll_through_all_variants_create(words, NULL, 7, true, NULL, _cancel, NULL);
 
     ui_screen_stack_push(test_scroll_through_all_variants);
-    ui_screen_process(NULL);
+    firmware_main_loop();
 }
 
 #pragma GCC diagnostic pop

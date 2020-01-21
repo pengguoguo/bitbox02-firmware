@@ -14,18 +14,17 @@
 
 #include <string.h>
 #ifndef TESTING
-#include "drivers/driver_init.h"
+#include "driver_init.h"
 #include "qtouch.h"
 #endif
-#include <ui/components/ui_components.h>
 #include <ui/screen_stack.h>
 #include <wally_bip39.h>
 
-#include <ui/screen_process.h>
+#include <firmware_main_loop.h>
+#include <ui/components/confirm_mnemonic.h>
 
 #include "hardfault.h"
 #include "keystore.h"
-#include "memory.h"
 #include "random.h"
 #include "screen.h"
 #include "sd.h"
@@ -136,7 +135,7 @@ int main(void)
         confirm_mnemonic_create(wordlist, NUM_CONFIRM_WORDS, 0, _confirm_mnemonic, _cancel);
     ui_screen_stack_switch(confirm_mnemonic);
 
-    ui_screen_process(NULL);
+    firmware_main_loop();
 }
 
 #pragma GCC diagnostic pop

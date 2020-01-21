@@ -19,8 +19,16 @@
 #include <cmocka.h>
 
 #include <touch/gestures.h>
-#include <ui/components/set_password.h>
-#include <ui/components/ui_components.h>
+#include <ui/components/confirm.h>
+#include <ui/components/image.h>
+#include <ui/components/info_centered.h>
+#include <ui/components/keyboard_switch.h>
+#include <ui/components/label.h>
+#include <ui/components/left_arrow.h>
+#include <ui/components/right_arrow.h>
+#include <ui/components/status.h>
+#include <ui/fonts/monogram_5X9.h>
+#include <ui/ui_util.h>
 
 #include "mock_component.h"
 #include "mock_qtouch.h"
@@ -97,8 +105,13 @@ static void cancel_callback(component_t* component) {}
 
 static void test_ui_components_confirm(void** state)
 {
-    component_t* confirm =
-        confirm_create("Is the Code correct?", "CODE", false, confirm_callback, cancel_callback);
+    component_t* confirm = confirm_create(
+        "Is the Code correct?",
+        "CODE",
+        &font_monogram_5X9,
+        false,
+        confirm_callback,
+        cancel_callback);
     assert_non_null(confirm);
     assert_ui_component_functions(confirm);
     confirm->f->cleanup(confirm);
@@ -116,7 +129,7 @@ static void test_ui_components_keyboard_switch(void** state)
 {
     component_t* mock_component = mock_component_create();
 
-    component_t* keyboard_switch = keyboard_switch_create(top_slider, mock_component);
+    component_t* keyboard_switch = keyboard_switch_create(top_slider, true, mock_component);
     assert_non_null(keyboard_switch);
     assert_ui_component_functions(keyboard_switch);
     keyboard_switch->f->cleanup(keyboard_switch);
@@ -132,14 +145,6 @@ static void test_ui_components_status(void** state)
     status->f->cleanup(status);
 }
 
-static void test_ui_components_set_password(void** state)
-{
-    component_t* set_password = set_password_create(NULL);
-    assert_non_null(set_password);
-    assert_ui_component_functions(set_password);
-    set_password->f->cleanup(set_password);
-}
-
 int main(void)
 {
     const struct CMUnitTest tests[] = {cmocka_unit_test(test_ui_components_label),
@@ -149,7 +154,6 @@ int main(void)
                                        cmocka_unit_test(test_ui_components_info_centered),
                                        cmocka_unit_test(test_ui_components_keyboard_switch),
                                        cmocka_unit_test(test_ui_components_status),
-                                       cmocka_unit_test(test_ui_components_set_password),
                                        cmocka_unit_test(test_ui_components_confirm)};
 
     return cmocka_run_group_tests(tests, NULL, NULL);

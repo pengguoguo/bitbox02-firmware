@@ -14,7 +14,7 @@
 
 #include <string.h>
 #ifndef TESTING
-#include "drivers/driver_init.h"
+#include "driver_init.h"
 #include "qtouch.h"
 #endif
 #include <workflow/show_mnemonic.h>
@@ -22,11 +22,10 @@
 
 #include <wally_bip39.h>
 
-#include <ui/screen_process.h>
+#include <firmware_main_loop.h>
 
 #include "hardfault.h"
 #include "keystore.h"
-#include "memory.h"
 #include "random.h"
 #include "screen.h"
 #include "sd.h"
@@ -80,7 +79,7 @@ int main(void)
 
     workflow_show_mnemonic_create();
 
-    ui_screen_process(NULL);
+    firmware_main_loop();
 }
 
 #pragma GCC diagnostic pop

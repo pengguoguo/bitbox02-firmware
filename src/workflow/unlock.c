@@ -13,14 +13,17 @@
 // limitations under the License.
 
 #include "unlock.h"
+#include "confirm.h"
 #include "password_enter.h"
 #include "status.h"
 #include "workflow.h"
 #include <hardfault.h>
 #include <keystore.h>
-#include <memory.h>
+#include <memory/memory.h>
+#include <screen.h>
 #include <string.h>
-#include <ui/components/ui_components.h>
+#include <ui/components/ui_images.h>
+#include <ui/fonts/password_11X12.h>
 #include <ui/screen_stack.h>
 #include <ui/ugui/ugui.h>
 #include <util.h>
@@ -32,22 +35,34 @@
 
 static bool _get_mnemonic_passphrase(char* passphrase_out)
 {
-    char mnemonic_passphrase[SET_PASSWORD_MAX_PASSWORD_LENGTH] = {0};
-    UTIL_CLEANUP_STR(mnemonic_passphrase);
-    char mnemonic_passphrase_repeat[SET_PASSWORD_MAX_PASSWORD_LENGTH] = {0};
-    UTIL_CLEANUP_STR(mnemonic_passphrase_repeat);
+    if (passphrase_out == NULL) {
+        Abort("_get_mnemonic_passphrase");
+    }
     while (true) {
-        if (!password_enter("Enter\noptional passphrase", mnemonic_passphrase)) {
+        if (!password_enter("Enter\noptional passphrase", true, passphrase_out)) {
             return false;
         }
-        if (!password_enter("Confirm\noptional passphrase", mnemonic_passphrase_repeat)) {
-            return false;
-        }
-        if (STREQ(mnemonic_passphrase, mnemonic_passphrase_repeat)) {
-            snprintf(passphrase_out, SET_PASSWORD_MAX_PASSWORD_LENGTH, "%s", mnemonic_passphrase);
+        if (strlen(passphrase_out) == 0) {
+            // No need to confirm the empty passphrase.
             break;
         }
-        workflow_status_create("Passphrases\ndo not match", false);
+        if (!workflow_confirm(
+                "",
+                "You will be asked to\nvisually confirm your\npassphrase now.",
+                NULL,
+                false,
+                true)) {
+            return false;
+        }
+        bool cancel_forced = false;
+        if (workflow_confirm_scrollable_longtouch(
+                "Confirm", passphrase_out, &font_password_11X12, &cancel_forced)) {
+            break;
+        }
+        if (cancel_forced) {
+            return false;
+        }
+        workflow_status_create("Please try again", false);
     }
     return true;
 }
@@ -89,6 +104,7 @@ keystore_error_t workflow_unlock_and_handle_error(const char* password)
     keystore_error_t unlock_result = keystore_unlock(password, &remaining_attempts);
     switch (unlock_result) {
     case KEYSTORE_OK:
+    case KEYSTORE_ERR_MAX_ATTEMPTS_EXCEEDED:
         break;
     case KEYSTORE_ERR_INCORRECT_PASSWORD: {
         char msg[100] = {0};
@@ -100,10 +116,6 @@ keystore_error_t workflow_unlock_and_handle_error(const char* password)
         workflow_status_create(msg, false);
         break;
     }
-    case KEYSTORE_ERR_MAX_ATTEMPTS_EXCEEDED:
-        workflow_status_create("Device reset", false);
-        workflow_start();
-        break;
     default:
         Abort("keystore unlock failed");
     }
@@ -125,7 +137,7 @@ bool workflow_unlock(void)
     while (true) {
         char password[SET_PASSWORD_MAX_PASSWORD_LENGTH] = {0};
         UTIL_CLEANUP_STR(password);
-        if (!password_enter("Enter password", password)) {
+        if (!password_enter("Enter password", false, password)) {
             return false;
         }
 

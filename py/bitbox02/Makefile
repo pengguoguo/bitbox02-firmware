@@ -12,8 +12,39 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-all: generated/hww_pb2.py generated/hww_pb2.pyi
 
-generated/hww_pb2.py generated/hww_pb2.pyi: ../../messages/hww.proto
-	mkdir -p generated/
-	protoc --proto_path=../../messages --python_out=generated/ --mypy_out=generated/ $^
+OUT_DIR=communication/generated
+
+PROTO_FILES=hww.proto common.proto backup_commands.proto bitbox02_system.proto bitboxbase.proto btc.proto eth.proto mnemonic.proto random_number.proto system.proto perform_attestation.proto
+
+TARGETS=$(addprefix ${OUT_DIR}/, $(PROTO_FILES:.proto=_pb2.py))
+
+all: ${TARGETS}
+
+# Explicit rules cannot have multiple outputs (it will be interpreted as multiple rules and
+# therefore the same command will be executed multiple times)
+# Instead we create a single implicit rule. Implicit rules allow multiple outputs without executing
+# the same command multiple times when multiple threads are used.
+# https://stackoverflow.com/questions/19822435/multiple-targets-from-one-recipe-and-parallel-execution
+TMP_TARGETS=$(addprefix %/, $(PROTO_FILES:.proto=_pb2.py))
+${TMP_TARGETS}: $(addprefix ../../messages/,${PROTO_FILES})
+	mkdir -p ${OUT_DIR}
+	protoc --proto_path=../../messages --python_out=${OUT_DIR} --mypy_out=${OUT_DIR} $^
+	touch ${@D}/__init__.py
+# The hack below is due to protobuf-python generating absolute paths (which are frowned upon) instead of relative paths.
+# https://github.com/protocolbuffers/protobuf/issues/1491
+	sed -i 's/^from \([^.]*_pb2\)/from .\1/g'  ${OUT_DIR}/*.pyi
+	sed -i 's/^import \([^.]*_pb2\) as \([^.]*__pb2\)/from . import \1 as \2/g' ${OUT_DIR}/*.py
+
+release-test: all
+	rm -rf dist/*
+	python3 setup.py sdist bdist_wheel
+	python3 -m twine upload --sign --repository-url https://test.pypi.org/legacy/ dist/*
+
+release-live: all
+	rm -rf dist/*
+	python3 setup.py sdist bdist_wheel
+	python3 -m twine upload --sign dist/*
+
+clean:
+	rm -f ${TARGETS}
